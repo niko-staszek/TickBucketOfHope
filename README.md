@@ -2,7 +2,7 @@
 
 Tick-density entry EA for MT4 with four selectable martingale/averaging scenarios, a locally-managed basket TP, a per-day-of-week session filter, and an on-chart dashboard for Positions + Controls.
 
-Originally shipped as "Volume AI System 4.2 / ALLin-MoE-LLM"; the AI branding is cosmetic — the actual mechanism is: **count ticks in price bins, enter when a bin's count crosses a threshold, manage the resulting basket with one of four martingale/averaging strategies.**
+The mechanism: **count ticks in price bins, enter when a bin's count crosses a threshold, manage the resulting basket with one of four martingale/averaging strategies.**
 
 ---
 
