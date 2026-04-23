@@ -116,15 +116,22 @@ input double tpMultiplier   = 5.0;   // Change TP - multipler of Starting Lot
 double   gSupportTop=0, gSupportBottom=0, gResistanceBottom=0, gResistanceTop=0;
 datetime gLastSupTime=0, gLastResTime=0;
 
-//======== ORDERS DATA TABLE ============
-input ENUM_BASE_CORNER TblCorner   = CORNER_RIGHT_LOWER;  // Anchor Corner
-input color            TblBgColor  = clrBlack;            // Backgorund Color
-input color            TblFontColor= clrGold;             // Table Text Color
+//======== DASHBOARD ============
+input bool ShowDashboard = true;               // Show on-chart dashboard
+input int  DashX         = 20;                 // Dashboard X offset (pixels)
+input int  DashY         = 30;                 // Dashboard Y offset (pixels)
 
-enum TBL_SIZE { SIZE_NORMAL=0, SIZE_SMALL=1 };
-input TBL_SIZE         TblSize     = SIZE_SMALL;         // Table Size
-input color            BottomTextColor = clrDarkGreen;         // Bottom Text Color
-input int              profitDaysBack = 1;                  // show Profit Days (set number)
+// Dashboard runtime state
+bool     g_eaStopped          = false;
+int      g_statsViewMode      = 0;             // 0=today, 1=week, 2=month
+datetime g_lastButtonCheck    = 0;
+datetime g_lastStatsRefresh   = 0;
+int      g_closedBuyToday=0,  g_closedSellToday=0;
+int      g_closedBuyWeek=0,   g_closedSellWeek=0;
+int      g_closedBuyMonth=0,  g_closedSellMonth=0;
+double   g_profitBuyToday=0,  g_profitSellToday=0;
+double   g_profitBuyWeek=0,   g_profitSellWeek=0;
+double   g_profitBuyMonth=0,  g_profitSellMonth=0;
 
 double margine = 0.0;
 double freeMargin;
@@ -293,14 +300,28 @@ void OnDeinit(const int reason)
    CleanupAllObjects();
   }
 //+------------------------------------------------------------------+
+//| Chart event: route button clicks to the dashboard handler        |
+//+------------------------------------------------------------------+
+void OnChartEvent(const int id, const long &lparam, const double &dparam, const string &sparam)
+  {
+   if(id == CHARTEVENT_OBJECT_CLICK)
+      CheckButtonClicks();
+  }
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
   {
    if(!TesterFastMode())
      {
-      ShowClosedProfitBottom2TF();
-      DrawClosedProfitTableGridInputs();
+      datetime tNow = TimeCurrent();
+      if(tNow - g_lastStatsRefresh >= 10)
+        {
+         RefreshPeriodStats();
+         g_lastStatsRefresh = tNow;
+        }
+      DrawDashboard();
+      CheckButtonClicks();
      }
 
    if(!IsTradingTime())
@@ -433,8 +454,8 @@ void OnTick()
 
    if(!TesterFastMode())
      {
-      ShowClosedProfitBottom2TF();
-      DrawClosedProfitTableGridInputs();
+      DrawDashboard();
+      CheckButtonClicks();
      }
   }
 
@@ -810,6 +831,8 @@ void CleanupAllObjects()
 //+------------------------------------------------------------------+
 void OpenPositions(double price, int direction)
   {
+   if(g_eaStopped)
+      return;
 
    long spread = 1;
    spread = SymbolInfoInteger(Symbol(),SYMBOL_SPREAD);
@@ -1855,324 +1878,274 @@ double ProfitForDay(datetime day, int _magic = -1, string symbol = "")
    return sum;
   }
 
-//=================================================
-// Function: Shows profit from closed positions |
-//   between two recently closed candles         |
-//=================================================
-void ShowClosedProfitBottom2TF()
+//+------------------------------------------------------------------+
+//| DASHBOARD — Positions + Controls (MoneyDancer-inspired)          |
+//+------------------------------------------------------------------+
+string ObjName(string suffix)
   {
-   if(TesterFastMode())
-      return;
-// --- determine TF two steps higher ---
-   int tf;
-   switch(Period())
+   return "TBM_" + IntegerToString(magic) + "_" + suffix;
+  }
+
+void DrawPanel(string name, int x, int y, int w, int h, color bgClr, color borderClr)
+  {
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgClr);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, borderClr);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+  }
+
+void DrawLabel(string name, int x, int y, string text, color clr, int fontSize, string font)
+  {
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+  }
+
+void CreateButton(string name, int x, int y, int w, int h, string text, color txtClr, color bgClr)
+  {
+   if(ObjectFind(0, name) < 0)
+      ObjectCreate(0, name, OBJ_BUTTON, 0, 0, 0);
+   ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, txtClr);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bgClr);
+   ObjectSetInteger(0, name, OBJPROP_BORDER_COLOR, clrDimGray);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, 8);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial Bold");
+   ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+  }
+
+//--- Period keys for grouping closed orders
+int DayKey(datetime t)   { MqlDateTime m; TimeToStruct(t,m); return m.year*10000 + m.mon*100 + m.day; }
+int WeekKey(datetime t)  { return (int)(t / (7*86400)); }
+int MonthKey(datetime t) { MqlDateTime m; TimeToStruct(t,m); return m.year*100 + m.mon; }
+
+//--- Floating P/L for currently open positions of one side
+double BasketFloatingPL(int dir)
+  {
+   double pl = 0.0;
+   for(int i = OrdersTotal()-1; i >= 0; --i)
      {
-      case PERIOD_M1:
-         tf = PERIOD_M15;
-         break; // M1 -> M15
-      case PERIOD_M5:
-         tf = PERIOD_M30;
-         break; // M5 -> M30
-      case PERIOD_M15:
-         tf = PERIOD_H1;
-         break; // M15 -> H1
-      case PERIOD_M30:
-         tf = PERIOD_H4;
-         break; // M30 -> H4
-      case PERIOD_H1:
-         tf = PERIOD_D1;
-         break; // H1 -> D1
-      case PERIOD_H4:
-         tf = PERIOD_W1;
-         break; // H4 -> W1
-      case PERIOD_D1:
-         tf = PERIOD_MN1;
-         break; // D1 -> MN1
-      case PERIOD_W1:
-         tf = PERIOD_MN1;
-         break; // W1 -> MN1 (nothing higher)
-      case PERIOD_MN1:
-         tf = PERIOD_MN1;
-         break; // already the highest
-      default:
-         tf = PERIOD_H1;
-         break;
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(OrderSymbol() != Symbol() || OrderMagicNumber() != magic) continue;
+      if(OrderType() != dir) continue;
+      pl += OrderProfit() + OrderSwap() + OrderCommission();
      }
+   return pl;
+  }
 
-   int bars = iBars(_Symbol, tf);
-   if(bars <= 0)
-      return;
-
-// --- profit-sum array for tf candles ---
-   double profitByBar[];
-   ArrayResize(profitByBar, bars);
-   ArrayInitialize(profitByBar, 0.0);
-
-// --- count closed orders for current symbol ---
-   for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
+//--- Close all profitable positions of one side
+void CloseProfitOrders(int orderType)
+  {
+   for(int i = OrdersTotal()-1; i >= 0; --i)
      {
-      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
-         continue;
-      if(OrderSymbol() != _Symbol)
-         continue;
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(OrderSymbol() != Symbol() || OrderMagicNumber() != magic) continue;
+      if(OrderType() != orderType) continue;
+      double profit = OrderProfit() + OrderSwap() + OrderCommission();
+      if(profit <= 0) continue;
+      double px = (orderType == OP_BUY ? Bid : Ask);
+      if(!OrderClose(OrderTicket(), OrderLots(), px, 3, clrYellowGreen))
+         ResetLastError();
+     }
+  }
 
-      double p = OrderProfit() + OrderSwap() + OrderCommission();
+//--- Close all positions of one side
+void CloseAllOrdersType(int orderType)
+  {
+   for(int i = OrdersTotal()-1; i >= 0; --i)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_TRADES)) continue;
+      if(OrderSymbol() != Symbol() || OrderMagicNumber() != magic) continue;
+      if(OrderType() != orderType) continue;
+      double px = (orderType == OP_BUY ? Bid : Ask);
+      if(!OrderClose(OrderTicket(), OrderLots(), px, 3, clrYellowGreen))
+         ResetLastError();
+     }
+  }
+
+//--- Refresh stats for closed positions by period (today/week/month)
+void RefreshPeriodStats()
+  {
+   datetime now = TimeCurrent();
+   int dk = DayKey(now), wk = WeekKey(now), mk = MonthKey(now);
+
+   g_closedBuyToday = 0; g_closedSellToday = 0;
+   g_profitBuyToday = 0; g_profitSellToday = 0;
+   g_closedBuyWeek  = 0; g_closedSellWeek  = 0;
+   g_profitBuyWeek  = 0; g_profitSellWeek  = 0;
+   g_closedBuyMonth = 0; g_closedSellMonth = 0;
+   g_profitBuyMonth = 0; g_profitSellMonth = 0;
+
+   int ht = OrdersHistoryTotal();
+   for(int i = 0; i < ht; ++i)
+     {
+      if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY)) continue;
+      if(OrderSymbol() != Symbol() || OrderMagicNumber() != magic) continue;
       datetime ct = OrderCloseTime();
-
-      int sh = iBarShift(_Symbol, tf, ct, true);
-      if(sh < 0 || sh >= bars)
-         continue;
-
-      profitByBar[sh] += p;
-     }
-
-// --- remove old labels from this function ---
-   int tot = ObjectsTotal(0,0,-1);
-   for(int o = tot-1; o >= 0; o--)
-     {
-      string nm = ObjectName(0, o);
-      if(StringFind(nm, "ProfitLbl2TF_") == 0)
-         ObjectDelete(0, nm);
-     }
-
-// --- vertical position (stable near window bottom) ---
-   double pMin = WindowPriceMin();
-   double pMax = WindowPriceMax();
-   if(pMax <= pMin)
-      return;
-   double y = pMin + (pMax - pMin) * 0.04; // ~2% above bottom
-
-// --- TF seconds to place label at candle midpoint ---
-   int tfSec;
-   switch(tf)
-     {
-      case PERIOD_M1:
-         tfSec=60;
-         break;
-      case PERIOD_M5:
-         tfSec=300;
-         break;
-      case PERIOD_M15:
-         tfSec=900;
-         break;
-      case PERIOD_M30:
-         tfSec=1800;
-         break;
-      case PERIOD_H1:
-         tfSec=3600;
-         break;
-      case PERIOD_H4:
-         tfSec=14400;
-         break;
-      case PERIOD_D1:
-         tfSec=86400;
-         break;
-      case PERIOD_W1:
-         tfSec=604800;
-         break;
-      case PERIOD_MN1:
-         tfSec=2592000;
-         break;
-      default:
-         tfSec=3600;
-         break;
-     }
-
-// --- draw values only where sum != 0 ---
-   for(int sh = 0; sh < bars; sh++)
-     {
-      if(MathAbs(profitByBar[sh]) < 0.00001)
-         continue;
-
-      datetime t0  = iTime(_Symbol, tf, sh);
-      datetime tMid= (tfSec>0 ? t0 + tfSec/2 : t0);
-
-      string name = "ProfitLbl2TF_" + IntegerToString(sh);
-      string txt  = DoubleToString(profitByBar[sh], 2);
-      color  clr  = (profitByBar[sh] >= 0 ? BottomTextColor : clrTomato);
-
-      ObjectCreate(0, name, OBJ_TEXT, 0, tMid, y);
-      ObjectSetText(name, txt, 9, "Arial", clr);
-      ObjectSetInteger(0, name, OBJPROP_BACK, false);
-      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
-      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      if(ct <= 0) continue;
+      double p = OrderProfit() + OrderSwap() + OrderCommission();
+      bool isBuy = (OrderType() == OP_BUY);
+      if(DayKey(ct) == dk)
+        { if(isBuy) { g_closedBuyToday++; g_profitBuyToday += p; } else { g_closedSellToday++; g_profitSellToday += p; } }
+      if(WeekKey(ct) == wk)
+        { if(isBuy) { g_closedBuyWeek++;  g_profitBuyWeek  += p; } else { g_closedSellWeek++;  g_profitSellWeek  += p; } }
+      if(MonthKey(ct) == mk)
+        { if(isBuy) { g_closedBuyMonth++; g_profitBuyMonth += p; } else { g_closedSellMonth++; g_profitSellMonth += p; } }
      }
   }
 
-//+------------------------------------------------------------------+
-//|                                                                  |
-//+------------------------------------------------------------------+
-// ==== NAME CONSTANTS ====
-#define TBL_BG   "Tbl_BG"
-#define TBL_PFX  "Tbl_"
-
-// ==== HELPERS ====
-bool IsRight(int corner) { return (corner==CORNER_RIGHT_UPPER || corner==CORNER_RIGHT_LOWER); }
-bool IsLower(int corner) { return (corner==CORNER_LEFT_LOWER  || corner==CORNER_RIGHT_LOWER); }
-
-// Universal OBJ_LABEL placement in panel (always ANCHOR_LEFT_UPPER)
-void PlaceLabelInPanel(const string name, int corner, int panelW, int panelH,
-                       int edgeX, int edgeY, int xIn, int yIn,
-                       const string text, color clr, int fontSize)
+//--- Draw Positions + Controls dashboard
+void DrawDashboard()
   {
-   int x = IsRight(corner) ? (edgeX + panelW - xIn) : (edgeX + xIn);
-   int y = IsLower(corner) ? (edgeY + panelH - yIn) : (edgeY + yIn);
+   if(!ShowDashboard || TesterFastMode()) return;
 
-   if(ObjectFind(0,name) < 0)
-      ObjectCreate(0,name,OBJ_LABEL,0,0,0);
-   ObjectSetInteger(0,name,OBJPROP_CORNER,    corner);
-   ObjectSetInteger(0,name,OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0,name,OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0,name,OBJPROP_FONTSIZE,  fontSize);
-   ObjectSetString(0,name,OBJPROP_FONT,      "Consolas");
-   ObjectSetString(0,name,OBJPROP_TEXT,      text);
-   ObjectSetInteger(0,name,OBJPROP_COLOR,     clr);
-   ObjectSetInteger(0,name,OBJPROP_BACK,      false);
-   ObjectSetInteger(0,name,OBJPROP_SELECTABLE,false);
-   ObjectSetInteger(0,name,OBJPROP_HIDDEN,    true);
-#ifdef OBJPROP_ANCHOR
-   ObjectSetInteger(0,name,OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-#endif
+   // Theme (MoneyDancer palette)
+   color bgPanel     = C'24,28,36';
+   color borderMain  = C'45,52,65';
+   color textBright  = C'220,225,230';
+   color textMuted   = C'130,140,155';
+   color accentBlue  = C'70,130,200';
+   color profitGreen = C'50,205,100';
+   color lossRed     = C'220,70,70';
+
+   int x = DashX;
+   int y = DashY;
+   int w = 410;
+
+   // ============ POSITIONS PANEL ============
+   DrawPanel(ObjName("D_StatsPanel"), x, y, w, 105, bgPanel, borderMain);
+   DrawLabel(ObjName("D_StatsTitle"), x + 12, y + 6, ">> POSITIONS", accentBlue, 8, "Arial Bold");
+
+   // Period buttons
+   int btnW = 60, btnH = 16;
+   int btnX = x + w - 195;
+   color btnT = (g_statsViewMode == 0 ? accentBlue : C'40,45,55');
+   color btnWc= (g_statsViewMode == 1 ? accentBlue : C'40,45,55');
+   color btnM = (g_statsViewMode == 2 ? accentBlue : C'40,45,55');
+   CreateButton(ObjName("D_BtnToday"), btnX, y + 5, btnW, btnH, "TODAY", textBright, btnT);
+   CreateButton(ObjName("D_BtnWeek"),  btnX + btnW + 3, y + 5, btnW, btnH, "WEEK",  textBright, btnWc);
+   CreateButton(ObjName("D_BtnMonth"), btnX + 2*(btnW + 3), y + 5, btnW, btnH, "MONTH", textBright, btnM);
+
+   int cB, cS; double pB, pS;
+   if(g_statsViewMode == 0)      { cB = g_closedBuyToday; cS = g_closedSellToday; pB = g_profitBuyToday; pS = g_profitSellToday; }
+   else if(g_statsViewMode == 1) { cB = g_closedBuyWeek;  cS = g_closedSellWeek;  pB = g_profitBuyWeek;  pS = g_profitSellWeek;  }
+   else                          { cB = g_closedBuyMonth; cS = g_closedSellMonth; pB = g_profitBuyMonth; pS = g_profitSellMonth; }
+
+   // BUY row (closed)
+   DrawLabel(ObjName("D_BL"), x + 15, y + 30, "BUY:", textMuted, 8, "Arial");
+   DrawLabel(ObjName("D_BC"), x + 60, y + 30, IntegerToString(cB), textBright, 9, "Consolas");
+   color pBClr = (pB >= 0 ? profitGreen : lossRed);
+   DrawLabel(ObjName("D_BP"), x + 100, y + 30, (pB >= 0 ? "+" : "") + DoubleToString(pB, 2), pBClr, 9, "Consolas");
+
+   // SELL row (closed)
+   DrawLabel(ObjName("D_SL"), x + 15, y + 48, "SELL:", textMuted, 8, "Arial");
+   DrawLabel(ObjName("D_SC"), x + 60, y + 48, IntegerToString(cS), textBright, 9, "Consolas");
+   color pSClr = (pS >= 0 ? profitGreen : lossRed);
+   DrawLabel(ObjName("D_SP"), x + 100, y + 48, (pS >= 0 ? "+" : "") + DoubleToString(pS, 2), pSClr, 9, "Consolas");
+
+   // TOTAL row
+   double totP = pB + pS;
+   int totC = cB + cS;
+   DrawLabel(ObjName("D_TL"), x + 15, y + 70, "TOTAL:", textMuted, 9, "Arial Bold");
+   DrawLabel(ObjName("D_TC"), x + 60, y + 70, IntegerToString(totC), textBright, 9, "Consolas");
+   color totClr = (totP >= 0 ? profitGreen : lossRed);
+   DrawLabel(ObjName("D_TP"), x + 100, y + 70, (totP >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(totP), 2), totClr, 11, "Arial Bold");
+
+   // Open positions (right column)
+   int oB = amountOfOrders(OP_BUY);
+   int oS = amountOfOrders(OP_SELL);
+   double fB = BasketFloatingPL(OP_BUY);
+   double fS = BasketFloatingPL(OP_SELL);
+   double fT = fB + fS;
+
+   DrawLabel(ObjName("D_OL"), x + w/2 + 15, y + 30, "OPEN:", textMuted, 8, "Arial");
+   DrawLabel(ObjName("D_OB"), x + w/2 + 60, y + 30, IntegerToString(oB) + " B", accentBlue, 9, "Consolas");
+   DrawLabel(ObjName("D_OS"), x + w/2 + 100, y + 30, IntegerToString(oS) + " S", lossRed, 9, "Consolas");
+
+   DrawLabel(ObjName("D_FL"), x + w/2 + 15, y + 48, "FLOAT:", textMuted, 8, "Arial");
+   color fClr = (fT >= 0 ? profitGreen : lossRed);
+   DrawLabel(ObjName("D_FV"), x + w/2 + 60, y + 48, (fT >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(fT), 2), fClr, 10, "Consolas");
+
+   // Margin % (kept from original panel)
+   if(OrdersTotal() > 0 && AccountInfoDouble(ACCOUNT_MARGIN_FREE) < freeMargin)
+     {
+      margine    = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2);
+      freeMargin = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE),  2);
+     }
+   DrawLabel(ObjName("D_ML"), x + w/2 + 15, y + 70, "MARGIN %:", textMuted, 8, "Arial");
+   DrawLabel(ObjName("D_MV"), x + w/2 + 85, y + 70, DoubleToString(margine, 2), textBright, 9, "Consolas");
+
+   y += 110;
+
+   // ============ CONTROLS PANEL ============
+   DrawPanel(ObjName("D_CtrlPanel"), x, y, w, 80, bgPanel, borderMain);
+   DrawLabel(ObjName("D_CtrlTitle"), x + 12, y + 6, ">> CONTROLS", accentBlue, 8, "Arial Bold");
+
+   int cBtnW = 95, cBtnH = 20;
+   int cY1 = y + 26, cY2 = y + 52;
+
+   CreateButton(ObjName("D_BtnProfitSell"),   x + 8,   cY1, cBtnW, cBtnH, "+ PROFIT SELL", textBright, C'70,45,45');
+   CreateButton(ObjName("D_BtnProfitBuy"),    x + 108, cY1, cBtnW, cBtnH, "+ PROFIT BUY",  textBright, C'45,70,45');
+   CreateButton(ObjName("D_BtnCloseAllSell"), x + 208, cY1, cBtnW, cBtnH, "X ALL SELL",    textBright, C'100,45,45');
+   CreateButton(ObjName("D_BtnCloseAllBuy"),  x + 308, cY1, cBtnW, cBtnH, "X ALL BUY",     textBright, C'45,80,45');
+
+   CreateButton(ObjName("D_BtnCloseAll"), x + 8, cY2, 195, cBtnH, "!! CLOSE ALL !!", textBright, C'130,50,50');
+   string stopTxt = (g_eaStopped ? "> START EA" : "[] STOP EA");
+   color  stopBg  = (g_eaStopped ? C'45,90,45'  : C'90,45,45');
+   CreateButton(ObjName("D_BtnStopEA"), x + 208, cY2, 195, cBtnH, stopTxt, textBright, stopBg);
   }
 
-// Panel background (OBJ_RECTANGLE_LABEL) – positioned same as above
-void DrawTableBackground(int corner, int panelW, int panelH, int edgeX, int edgeY, color bg)
+//--- Process dashboard button clicks (called from OnTick and OnChartEvent)
+void CheckButtonClicks()
   {
-   int x = IsRight(corner) ? (edgeX + panelW) : edgeX;
-   int y = IsLower(corner) ? (edgeY + panelH) : edgeY;
+   if(!ShowDashboard) return;
+   datetime now = TimeCurrent();
+   if(now - g_lastButtonCheck < 1) return;
+   g_lastButtonCheck = now;
 
-   if(ObjectFind(0,TBL_BG) < 0)
-      ObjectCreate(0, TBL_BG, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_CORNER,    corner);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_XSIZE,     panelW);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_YSIZE,     panelH);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_BGCOLOR,   bg);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_COLOR,     clrDimGray);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_WIDTH,     1);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_BACK,      false);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_SELECTABLE,false);
-   ObjectSetInteger(0,TBL_BG,OBJPROP_HIDDEN,    true);
-#ifdef OBJPROP_ANCHOR
-   ObjectSetInteger(0,TBL_BG,OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-#endif
-  }
+   if(ObjectGetInteger(0, ObjName("D_BtnToday"), OBJPROP_STATE))
+     { g_statsViewMode = 0; ObjectSetInteger(0, ObjName("D_BtnToday"), OBJPROP_STATE, false); }
+   if(ObjectGetInteger(0, ObjName("D_BtnWeek"),  OBJPROP_STATE))
+     { g_statsViewMode = 1; ObjectSetInteger(0, ObjName("D_BtnWeek"),  OBJPROP_STATE, false); }
+   if(ObjectGetInteger(0, ObjName("D_BtnMonth"), OBJPROP_STATE))
+     { g_statsViewMode = 2; ObjectSetInteger(0, ObjName("D_BtnMonth"), OBJPROP_STATE, false); }
 
-// ================== MAIN FUNCTION ==================
-void DrawClosedProfitTableGridInputs()
-  {
-   if(TesterFastMode())
-      return;
-// --- sizes depend on mode (normal/small)
-   double scale = (TblSize==SIZE_SMALL ? 0.5 : 1.0);
+   if(ObjectGetInteger(0, ObjName("D_BtnProfitSell"), OBJPROP_STATE))
+     { CloseProfitOrders(OP_SELL); ObjectSetInteger(0, ObjName("D_BtnProfitSell"), OBJPROP_STATE, false); }
+   if(ObjectGetInteger(0, ObjName("D_BtnProfitBuy"),  OBJPROP_STATE))
+     { CloseProfitOrders(OP_BUY);  ObjectSetInteger(0, ObjName("D_BtnProfitBuy"),  OBJPROP_STATE, false); }
+   if(ObjectGetInteger(0, ObjName("D_BtnCloseAllSell"), OBJPROP_STATE))
+     { CloseAllOrdersType(OP_SELL); ObjectSetInteger(0, ObjName("D_BtnCloseAllSell"), OBJPROP_STATE, false); }
+   if(ObjectGetInteger(0, ObjName("D_BtnCloseAllBuy"),  OBJPROP_STATE))
+     { CloseAllOrdersType(OP_BUY);  ObjectSetInteger(0, ObjName("D_BtnCloseAllBuy"),  OBJPROP_STATE, false); }
 
-   int panelW   = (int)MathRound(360 * scale);
-   int panelH   = (int)MathRound(208 * scale);
-   int fontSz   = (int)MathMax(8, MathRound(12 * scale));
-   int padInX   = (int)MathRound(10 * scale);
-   int padInY   = (int)MathRound(10 * scale);
-
-// window edge margin (Y larger at bottom to avoid overlapping time axis)
-   int edgeX = 14;
-   int edgeY = IsLower(TblCorner) ? 50 : 14;
-
-// --- count closures (current symbol)
-   int buyCnt=0, sellCnt=0;
-   double buySum=0.0, sellSum=0.0;
-
-   datetime from = iTime(Symbol(), PERIOD_D1, profitDaysBack);
-   datetime to   = TimeCurrent();
-
-   for(int i=OrdersHistoryTotal()-1; i>=0; --i)
-     {
-      if(!OrderSelect(i,SELECT_BY_POS,MODE_HISTORY))
-         continue;
-      if(OrderSymbol()!=_Symbol)
-         continue;
-      double p = OrderProfit()+OrderSwap()+OrderCommission();
-      int tp = OrderType();
-      datetime tclose = OrderCloseTime();
-
-      if(tclose <= 0)
-         continue;
-      if(tclose < from)
-         break;
-      if(tclose > to)
-         continue;
-
-      if(tp==OP_BUY)
-        {
-         buyCnt++;
-         buySum  += p;
-        }
-      if(tp==OP_SELL)
-        {
-         sellCnt++;
-         sellSum += p;
-        }
-     }
-   int totalCnt = buyCnt + sellCnt;
-   double totalSum = buySum + sellSum;
-
-   if(OrdersTotal() > 0)
-     {
-      if(AccountInfoDouble(ACCOUNT_MARGIN_FREE) < freeMargin)
-        {
-         margine = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL),2);
-         freeMargin = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE),2);
-        }
-     }
-
-// --- remove old panel objects
-   for(int k=ObjectsTotal(0,0,-1)-1; k>=0; --k)
-     {
-      string nm=ObjectName(0,k);
-      if(nm==TBL_BG || StringFind(nm,TBL_PFX)==0)
-         ObjectDelete(0,nm);
-     }
-
-// --- background
-   DrawTableBackground(TblCorner, panelW, panelH, edgeX, edgeY, TblBgColor);
-
-// --- cell positions (from LEFT/TOP of panel)
-   int c1 = padInX;                       // Label
-   int c2 = padInX + (int)MathRound(120*scale); // Count
-   int c3 = padInX + (int)MathRound(220*scale); // Amount
-
-   int r0 = padInY + (int)MathRound(4*scale);;
-   int r1 = padInY + (int)MathRound(38*scale);
-   int r2 = r1 + (int)MathRound(28*scale);
-   int r3 = r2 + (int)MathRound(28*scale);
-   int r4 = r3 + (int)MathRound(40*scale);
-   int r5 = r4 + (int)MathRound(28*scale);
-
-   color fontClr = TblFontColor;  // single color for whole table
-
-// --- cells
-   PlaceLabelInPanel(TBL_PFX+"r0c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r0,"ALLin-MoE-LLM",   fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r0c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r0,"connected",fontClr,fontSz);
-
-   PlaceLabelInPanel(TBL_PFX+"r1c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r1,"BUY",   fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r1c2",TblCorner,panelW,panelH,edgeX,edgeY,c2,r1,IntegerToString(buyCnt),fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r1c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r1,DoubleToString(buySum,2),fontClr,fontSz);
-
-   PlaceLabelInPanel(TBL_PFX+"r2c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r2,"SELL",  fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r2c2",TblCorner,panelW,panelH,edgeX,edgeY,c2,r2,IntegerToString(sellCnt),fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r2c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r2,DoubleToString(sellSum,2),fontClr,fontSz);
-
-   PlaceLabelInPanel(TBL_PFX+"r3c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r3,"TOTAL", fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r3c2",TblCorner,panelW,panelH,edgeX,edgeY,c2,r3,IntegerToString(totalCnt),fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r3c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r3,DoubleToString(totalSum,2),fontClr,fontSz);
-
-   PlaceLabelInPanel(TBL_PFX+"r4c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r4,"MARGIN FREE", fontClr,fontSz);
-//PlaceLabelInPanel(TBL_PFX+"r4c2",TblCorner,panelW,panelH,edgeX,edgeY,c2,r4,IntegerToString(totalCnt),fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r4c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r4,DoubleToString(freeMargin,2),fontClr,fontSz);
-
-   PlaceLabelInPanel(TBL_PFX+"r5c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r5,"MARGIN %", fontClr,fontSz);
-//PlaceLabelInPanel(TBL_PFX+"r5c2",TblCorner,panelW,panelH,edgeX,edgeY,c2,r4,IntegerToString(totalCnt),fontClr,fontSz);
-   PlaceLabelInPanel(TBL_PFX+"r5c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r5,DoubleToString(margine,2),fontClr,fontSz);
-
+   if(ObjectGetInteger(0, ObjName("D_BtnCloseAll"), OBJPROP_STATE))
+     { CloseAllOrders(); g_eaStopped = true; ObjectSetInteger(0, ObjName("D_BtnCloseAll"), OBJPROP_STATE, false); }
+   if(ObjectGetInteger(0, ObjName("D_BtnStopEA"), OBJPROP_STATE))
+     { g_eaStopped = !g_eaStopped; ObjectSetInteger(0, ObjName("D_BtnStopEA"), OBJPROP_STATE, false); }
   }
 
 //+------------------------------------------------------------------+
