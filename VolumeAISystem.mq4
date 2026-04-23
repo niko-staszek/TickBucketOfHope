@@ -1,24 +1,13 @@
 //+------------------------------------------------------------------+
-//|                                                Trading AI System |
-//|                                                   AI Trade Maker |
+//|                                        Tick Bucket Martingale EA |
+//|                              Tick density entry + averaging exits |
 //|                                                                  |
 //+------------------------------------------------------------------+
-#property copyright "ALLinTraders"
-#property link      "https://allintraders.com/"
+#property copyright ""
+#property link      ""
 #property version   "4.2"
 #property strict
 
-//+------------------------------------------------------------------+
-//| LICENSE PROTECTION PARAMETERS                                     |
-//+------------------------------------------------------------------+
-input string l0 = "=======================";                   // = LICENSE PARAMETERS =
-input string LicenseKey = "";                                   // License Key (Required)
-
-// License protection variables
-const string VALID_LICENSE = "aQBk1013m3k1okMdfs8a912e0artt1356";
-const datetime EXPIRY_DATE = D'2026.05.10 23:59:59';
-bool isLicenseValid = false;
-datetime lastLicenseCheck = 0;  // Track last license verification
 
 //=== Poziomy Tick (licznik ticków w binie ceny)
 bool ShowTickLevels    = true;       // Turn ON/OFF Tick Order Flow (TOF)
@@ -53,17 +42,17 @@ input int    startBe = 5;                   // Find Exit after x Losing Trades
 input int    bePoints = 10;                 // Breakeven + Take Profit (points)
 input double dailyProfit   = 0.0;           // Daily Profit in % if 0 off
 input double dailyLost     = 0.0;           // Daily Lost in % if 0 off
-bool   scenerioA = false;                   // Set A
-extern bool   scenerioB = false;            // Model MoE 1.5 (100k+)
-extern bool   scenerioC = false;            // Model MoE RLF (Thinker)
-extern bool   scenerioD = true;             // Model MOE RLHF-RAT
+input bool   scenerioA = false;             // Scenario A: BE lot on oldest position
+input bool   scenerioB = false;             // Scenario B: Multiplier averaging (1.5x)
+input bool   scenerioC = false;             // Scenario C: Near/far distance averaging
+input bool   scenerioD = true;              // Scenario D: Farthest-position multiplier
 input int     closeTimeHour   = 23;         // Close ALL Hour (if 24 turn off)
 input int     closeTimeMinute = 45;         // Close Minutes
 input int timeFilter = 30;                  // Time Filter
 input bool autoCloseTrigger = true;         // Auto Close Trigger
 
 datetime startHour, endHour, currentCandle, closeAllHour,m15Candle, positionBuyTime, positionSellTime;
-int year, month, day_, basceScenerioCSellorder, baseScenerioCBuyOrder;
+int year, month, day_, baseScenerioCSellOrder, baseScenerioCBuyOrder;
 MqlDateTime str1, dt;
 bool scenerioCSellActive = false;
 bool scenerioCBuyActive = false;
@@ -141,10 +130,9 @@ double margine = 0.0;
 double freeMargin;
 
 //============================== TESTER FAST MODE =============================
-bool gTesterFastMode = false;
 bool TesterFastMode()
   {
-   return (gTesterFastMode || IsTesting());
+   return IsTesting();
   }
 
 
@@ -247,21 +235,14 @@ bool CheckAllowedBroker()
 //============================== INIT/DEINIT ==============================
 int OnInit()
   {
-   gTesterFastMode = IsTesting();
-
    ArrayResize(levels, max_levels);
    CalculateSymbolParameters();
 
    if(!TesterFastMode())
      {
-      Print("AI SR EA ",Symbol(),",",PeriodToStr(Period()),
+      Print("Tick Bucket Martingale EA ",Symbol(),",",PeriodToStr(Period()),
             " lb=",lookbackPeriod," vol_len=",vol_len," atr=",atr_period," box_withd=",box_withd);
       ReadPositionData();
-     }
-   else
-     {
-      isLicenseValid = true;
-      lastLicenseCheck = TimeCurrent();
      }
 
    freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
@@ -343,25 +324,6 @@ void OnTick()
   {
    if(!TesterFastMode())
      {
-      //--- Check license once per day
-      static datetime lastCheckDay = 0;
-      datetime currentDay = (datetime)(TimeCurrent() / 86400) * 86400;  // Start of current day
-
-      if(currentDay != lastCheckDay)
-        {
-         if(!VerifyLicense())
-           {
-            return;  // License invalid, stop trading
-           }
-         lastCheckDay = currentDay;
-        }
-
-      //--- Quick check if license is valid
-      if(!isLicenseValid)
-        {
-         return;
-        }
-
       ShowClosedProfitBottom2TF();
       DrawClosedProfitTableGridInputs();
      }
@@ -431,12 +393,12 @@ void OnTick()
    CheckAndCloseLocalTPs();
    CleanUpClosedPositions();
 
-   if(basceScenerioCSellorder >0 && OrderSelect(basceScenerioCSellorder,SELECT_BY_TICKET))
+   if(baseScenerioCSellOrder >0 && OrderSelect(baseScenerioCSellOrder,SELECT_BY_TICKET))
      {
       if(OrderCloseTime() != 0)
         {
          scenerioCSellActive = false;
-         basceScenerioCSellorder = 0;
+         baseScenerioCSellOrder = 0;
          cAvgCountSell = 0;
          cBaseSellPrice = 0.0;
          cBaseSellLot   = 0.0;
@@ -465,6 +427,12 @@ void OnTick()
       last_min = now;
      }
 
+   if(PersistTickAcrossTF && !TesterFastMode() && now - last_tick_save >= PersistSaveEverySec)
+     {
+      last_tick_save = now;
+      SaveTickBucketsToFile();
+     }
+
 // co godzinę – sprawdź wczoraj
    static datetime last_hist = 0;
    if(now - last_hist >= 3600)
@@ -473,7 +441,7 @@ void OnTick()
      }
 
    if(isNewM15Candle())
-      ResetAllTickBuckets(true);
+      ResetAllTickBuckets();
 
    if(aiZone == true)
      {
@@ -637,7 +605,7 @@ int FindBucket(double price_bin)
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void ResetAllTickBuckets(bool announce)
+void ResetAllTickBuckets()
   {
    ArrayResize(tick_buckets, 0);
    tick_bucket_cnt = 0;
@@ -647,13 +615,6 @@ void ResetAllTickBuckets(bool announce)
    levels_count       = 0;
    last_data_save     = 0;
    last_history_check = 0;
-   if(announce)
-     {
-      //   Print("Tick buckets reset. Bucket Size: ", ArraySize(tick_buckets));
-      //   Print("Levels bucket reset.Bucket 0: ",levels[0].price);
-     }
-//if(PersistTickAcrossTF)
-//   SaveTickBucketsToFile();
   }
 //+------------------------------------------------------------------+
 //|                                                                  |
@@ -671,7 +632,7 @@ void ResetTickBucketsIfNeeded()
       // zabezpiecz: zapisz stan „starego dnia” i wyczyść
       if(PersistTickAcrossTF)
          SaveTickBucketsToFile();
-      ResetAllTickBuckets(false);
+      ResetAllTickBuckets();
       last_bucket_day = dt.day;
      }
   }
@@ -735,8 +696,7 @@ void CreateTickLevel(datetime t, double price, int dir /*1 buy, -1 sell, 0 neutr
      {
       CreateDirectionArrow(t, price, dir);
       int marketDirection = MarketSlopeSignal(Symbol(),0,maPeriod,slopeLookbackBars,slopeThresholdPts);
-      //Print("Market direction: ", marketDirection);
-
+   
       if(TimeCurrent() > startHour && TimeCurrent() < endHour)
         {
          if(dir < 0 && marketDirection <= 0)
@@ -878,11 +838,6 @@ void OpenPositions(double price, int direction)
 
    long spread = 1;
    spread = SymbolInfoInteger(Symbol(),SYMBOL_SPREAD);
-
-// Print("Time current: ",TimeCurrent()," time sell: ",(positionSellTime + timeFilter), " time buy: ",(positionBuyTime + timeFilter));
-// Print("Is time cur > time sell: ",TimeCurrent() > (positionSellTime + timeFilter));
-// Print("Is time cur > time buy: ", TimeCurrent() > (positionBuyTime + timeFilter));
-// Print("Spread: ",spread, " Orders sell :",amountOfOrders(1), " Orders Buy: ",amountOfOrders(0), " Direcion: ", direction);
 
    if(spread < maxSpread)
      {
@@ -1157,7 +1112,6 @@ void CallScenerioA(int buyORsell)
          Print("Position open failed: ", GetLastError());
          ResetLastError();
         }
-      //bool modify = OrderModify(orderTicket,posPrice,0,Bid-(tpRange*Point()),0,clrOrange);
       AddOrUpdateLocalTP(orderTicket, Bid-(tpRange*Point()), OP_SELL);
      }
 
@@ -1185,7 +1139,6 @@ void CallScenerioA(int buyORsell)
          Print("Position open failed: ", GetLastError());
          ResetLastError();
         }
-      //bool modify = OrderModify(orderTicket,posPrice,0,Ask+(tpRange*Point()),0,clrAqua);
       AddOrUpdateLocalTP(orderTicket, Ask+(tpRange*Point()), OP_BUY);
      }
   }
@@ -1252,11 +1205,11 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
    cBasePrice = OrderOpenPrice();
    cBaseLot   = OrderLots();
 
-   if(basceScenerioCSellorder == 0 && scenerioCSellActive == false)
+   if(baseScenerioCSellOrder == 0 && scenerioCSellActive == false)
      {
       if(dir == 1)
         {
-         basceScenerioCSellorder = cBaseTk;   // zachowujemy zgodność z dotychczasowym polem
+         baseScenerioCSellOrder = cBaseTk;   // zachowujemy zgodność z dotychczasowym polem
          scenerioCSellActive = true;
          cBaseSellPrice = cBasePrice;
          cBaseSellLot   = cBaseLot;
@@ -1377,7 +1330,6 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
          double rawTP = (dir==OP_BUY ? OrderOpenPrice()+tpRange*Point
                          : OrderOpenPrice()-tpRange*Point);
          double tp    = ClampTPToStops(dir, rawTP);
-         //bool mod = OrderModify(OrderTicket(), OrderOpenPrice(), 0, tp, 0, clrNONE);
          AddOrUpdateLocalTP(OrderTicket(), tp, dir);
         }
      }
@@ -1616,7 +1568,6 @@ bool SetTP(int ticket, double newTP) // Scenerio B only
       return false;
    if(!OrderSelect(ticket, SELECT_BY_TICKET))
       return false;
-// OrderModify(OrderTicket(), OrderOpenPrice(), OrderStopLoss(), newTP, 0, clrNONE);
    AddOrUpdateLocalTP(OrderTicket(), newTP, OrderType());
    return true;
   }
@@ -1698,23 +1649,6 @@ bool isNewM15Candle()
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void ClearTickFile()
-  {
-   if(TesterFastMode())
-      return;
-   int fh = FileOpen(tick_file, FILE_WRITE | FILE_COMMON); // bez FILE_CSV — bo nic nie piszemy
-   if(fh != INVALID_HANDLE)
-     {
-      // Plik otwarty w trybie FILE_WRITE automatycznie nadpisuje zawartość
-      FileClose(fh); // Zapisujemy "nic", więc po prostu zamykamy
-      Print("ClearTickFile");
-     }
-   else
-     {
-      Print("ClearTickFile error: ", GetLastError());
-     }
-  }
-//+------------------------------------------------------------------+
 
 
 // ============== LOGIKA i FUNKCJE STREF ============================
@@ -1748,16 +1682,14 @@ double TR_i(int i)
    double tr2=MathAbs(High[i]-Close[i+1]);
    double tr3=MathAbs(Low[i]-Close[i+1]);
    return MathMax(tr1,MathMax(tr2,tr3));
-  }                                     // :contentReference[oaicite:5]{index=5}
-
+  }
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
 double rma_step(const double &ma[],const double &val[],int len,int i)
   {
    return (val[i] + (len-1)*ma[i+1]) / len;
-  }                                   // :contentReference[oaicite:6]{index=6}
-
+  }
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
@@ -1768,8 +1700,7 @@ double highest_forward(const double &series[],int length1,int i)
    for(int k=i+1; k<ub; k++)
       max = MathMax(max, series[k]);                      // ścisłe '<'
    return max;
-  }                                                                 // :contentReference[oaicite:7]{index=7}
-
+  }
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
@@ -1780,8 +1711,7 @@ double lowest_forward(const double &series[],int length1,int i)
    for(int k=i+1; k<ub; k++)
       min = MathMin(min, series[k]);                      // ścisłe '<'
    return min;
-  }                                                                 // :contentReference[oaicite:8]{index=8}
-
+  }
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
@@ -1797,8 +1727,7 @@ double pivothigh_close(const double &arr[],int left,int right,int i)
       if(pivot < arr[i+right-j])
          return 0.0;            // tylko '<'
    return pivot;
-  }                                                               // :contentReference[oaicite:9]{index=9}
-
+  }
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
@@ -1814,8 +1743,7 @@ double pivotlow_close(const double &arr[],int left,int right,int i)
       if(pivot > arr[i+right-j])
          return 0.0;            // tylko '>'
    return pivot;
-  }                                                               // :contentReference[oaicite:10]{index=10}
-
+  }
 // === GŁÓWNA LOGIKA — co tick, 1:1, bez rysowania ===
 bool AISupportResistance()
   {
@@ -1942,7 +1870,7 @@ double ProfitForDay(datetime day, int _magic = -1, string symbol = "")
       datetime ct = OrderCloseTime();
       if(ct >= start && ct < end)
         {
-         if((magic == -1 || OrderMagicNumber() == magic) &&
+         if((_magic == -1 || OrderMagicNumber() == _magic) &&
             (symbol == "" || OrderSymbol() == symbol))
            {
             sum += OrderProfit() + OrderSwap() + OrderCommission();
@@ -2289,9 +2217,6 @@ LocalOrders localOrders[]; // Globalna tablica do przechowywania lokalnych TP
 void AddOrUpdateLocalTP(int ticket, double tp_price, int type)
   {
 
-   if(ArraySize(localOrders) < 0)
-      ArrayResize(localOrders, 0);
-
    for(int i = 0; i < ArraySize(localOrders); i++)
      {
       if(localOrders[i].ticket == ticket)
@@ -2473,7 +2398,7 @@ void LogDailyMargins(double ml, double fm)
    if(h != INVALID_HANDLE)
      {
       FileSeek(h, 0, SEEK_END);
-      FileWrite(h, TimeCurrent()-86400, DoubleToString(ml,2), DoubleToString(fm,2));
+      FileWrite(h, TimeCurrent(), DoubleToString(ml,2), DoubleToString(fm,2));
       FileClose(h);
      }
   }
@@ -2505,43 +2430,6 @@ int MarketSlopeSignal(string symbol,
          return(-1);
       else
          return(0);
-  }
-
-// minuty od północy
-int mm(int h,int m)
-  {
-   return(h*60+m);
-  }
-
-// sprawdza 3 sesje jednego dnia,
-// pilnuje też: start<end, brak nachodzenia i prawidłowa kolejność
-bool DayOK(int cur,
-           int sh1,int sm1,int eh1,int em1,
-           int sh2,int sm2,int eh2,int em2,
-           int sh3,int sm3,int eh3,int em3)
-  {
-   int s[3],e[3];
-   s[0]=mm(sh1,sm1);
-   e[0]=mm(eh1,em1);
-   s[1]=mm(sh2,sm2);
-   e[1]=mm(eh2,em2);
-   s[2]=mm(sh3,sm3);
-   e[2]=mm(eh3,em3);
-
-   int lastEnd=-1;
-   for(int i=0; i<3; i++)
-     {
-      if(s[i]==e[i])
-         continue;          // sesja wyłączona
-      if(s[i]>e[i])
-         return(false);     // nie pozwalamy na nocne okno
-      if(lastEnd!=-1 && s[i]<lastEnd)   // wymusza: start2 >= end1 itd.
-         return(false);
-      if(cur>=s[i] && cur<e[i])         // w środku okna
-         return(true);
-      lastEnd=e[i];
-     }
-   return(false);
   }
 
 //+------------------------------------------------------------------+
@@ -2687,71 +2575,6 @@ void UpdateStartEndFromSets()
 
    startHour = StringToTime(datePart + StringFormat("%02d:%02d", sh, sm));
    endHour   = StringToTime(datePart + StringFormat("%02d:%02d", eh, em));
-  }
-
-//+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-//| LICENSE VERIFICATION FUNCTIONS                                    |
-//+------------------------------------------------------------------+
-
-//+------------------------------------------------------------------+
-//| Verify License Key and Expiry Date                               |
-//+------------------------------------------------------------------+
-bool VerifyLicense()
-  {
-   if(TesterFastMode())
-     {
-      isLicenseValid = true;
-      lastLicenseCheck = TimeCurrent();
-      return true;
-     }
-   datetime currentTime = TimeCurrent();
-   
-   //--- Check if already verified today
-   if(isLicenseValid && lastLicenseCheck > 0)
-     {
-      int daysSinceCheck = (int)((currentTime - lastLicenseCheck) / 86400);
-      if(daysSinceCheck < 1)
-        {
-         // Already checked today, skip verification
-         return(true);
-        }
-     }
-   
-   //--- Check expiry date first
-   if(currentTime > EXPIRY_DATE)
-     {
-      Alert("LICENSE EXPIRED!");
-      Alert("This EA expired on: ", TimeToString(EXPIRY_DATE, TIME_DATE));
-      Alert("Current date: ", TimeToString(currentTime, TIME_DATE));
-      Alert("Please contact support for license renewal.");
-      isLicenseValid = false;
-      return(false);
-     }
-   
-   //--- Check license key
-   if(LicenseKey != VALID_LICENSE)
-     {
-      Alert("INVALID LICENSE KEY!");
-      Alert("Please enter valid license key in EA settings.");
-      Alert("Go to: Expert Properties -> Inputs -> License Key");
-      isLicenseValid = false;
-      return(false);
-     }
-   
-   //--- License is valid
-   isLicenseValid = true;
-   lastLicenseCheck = currentTime;  // Save verification time
-   Print("License verified successfully. Valid until: ", TimeToString(EXPIRY_DATE, TIME_DATE));
-   
-   //--- Calculate days remaining
-   int daysRemaining = (int)((EXPIRY_DATE - currentTime) / 86400);
-   if(daysRemaining <= 30)
-     {
-      Alert("LICENSE WARNING: Only ", daysRemaining, " days remaining!");
-     }
-   
-   return(true);
   }
 
 //+------------------------------------------------------------------+
