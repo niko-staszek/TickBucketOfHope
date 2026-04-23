@@ -9,7 +9,7 @@
 #property strict
 
 
-//=== Poziomy Tick (licznik ticków w binie ceny)
+//=== Tick Levels (tick counter per price bin)
 bool ShowTickLevels    = true;       // Turn ON/OFF Tick Order Flow (TOF)
 color TickColor        = clrBlack;
 int   TickWidth        = 2;          // Don't Change
@@ -21,17 +21,17 @@ double TickBinSize     = 0.0;        // 0=auto (1 pip FX, 0.1 XAU)
 bool  TickResetDaily   = true;       // Reset Scan TOF every day
 bool  TickManualResetNow = false;    // True - reset now and make a save
 
-//=== Trwałość Tick między TF (zapisy do CSV)
+//=== Tick persistence across timeframes (CSV writes)
 bool  PersistTickAcrossTF = true;    // True - save TOF multi TF
 int   PersistSaveEverySec = 60;      // Make a save TOF every X sec
 
-//=== Strzałki kierunku Tick
+//=== Tick direction arrows
 bool  ShowTickArrows   = true;
 color TickArrowBuyColor  = clrDodgerBlue;
 color TickArrowSellColor = clrRed;
 double TickArrowOffset   = 1;      // Size of marks (1.5 * bin)
 
-//=== Pozycje
+//=== Positions
 input int    magic   = 1;                   // Magic Number {change for multi asset)
 input int    maxSpread = 45;                // Max Spread
 input double lotSize = 0.01;                // Starting Lot Size
@@ -42,20 +42,20 @@ input int    startBe = 5;                   // Find Exit after x Losing Trades
 input int    bePoints = 10;                 // Breakeven + Take Profit (points)
 input double dailyProfit   = 0.0;           // Daily Profit in % if 0 off
 input double dailyLost     = 0.0;           // Daily Lost in % if 0 off
-input bool   scenerioA = false;             // Scenario A: BE lot on oldest position
-input bool   scenerioB = false;             // Scenario B: Multiplier averaging (1.5x)
-input bool   scenerioC = false;             // Scenario C: Near/far distance averaging
-input bool   scenerioD = true;              // Scenario D: Farthest-position multiplier
+input bool   scenarioA = false;             // Scenario A: BE lot on oldest position
+input bool   scenarioB = false;             // Scenario B: Multiplier averaging (1.5x)
+input bool   scenarioC = false;             // Scenario C: Near/far distance averaging
+input bool   scenarioD = true;              // Scenario D: Farthest-position multiplier
 input int     closeTimeHour   = 23;         // Close ALL Hour (if 24 turn off)
 input int     closeTimeMinute = 45;         // Close Minutes
 input int timeFilter = 30;                  // Time Filter
 input bool autoCloseTrigger = true;         // Auto Close Trigger
 
 datetime startHour, endHour, currentCandle, closeAllHour,m15Candle, positionBuyTime, positionSellTime;
-int year, month, day_, baseScenerioCSellOrder, baseScenerioCBuyOrder;
+int year, month, day_, baseScenarioCSellOrder, baseScenarioCBuyOrder;
 MqlDateTime str1, dt;
-bool scenerioCSellActive = false;
-bool scenerioCBuyActive = false;
+bool scenarioCSellActive = false;
+bool scenarioCBuyActive = false;
 double accountDailyProfit, accountDailyLost;
 
 struct CAvg
@@ -76,7 +76,7 @@ int    cBaseBuyTk   = 0,   cBaseSellTk   = 0;
 double cBaseBuyPrice= 0.0, cBaseSellPrice= 0.0;
 double cBaseBuyLot  = 0.0, cBaseSellLot  = 0.0;
 
-//--- Dane i pliki
+//--- Data and files
 struct VolumeLevel
   {
    datetime          date;
@@ -100,7 +100,7 @@ datetime last_history_check = 0;
 
 string data_folder   = "VolumeLevels\\";
 string symbol_folder = "";
-string tick_file     = "";        // plik CSV na liczniki ticków
+string tick_file     = "";        // CSV file for tick counters
 
 double symbol_point = 0;
 double symbol_pip_value = 0;
@@ -206,31 +206,6 @@ input int SunSet3End   = 0;
 
 int Start[21], End[21];
 bool gTradingStoppedToday = false;
-
-//============================== BROKER VALIDATION ==========================
-bool CheckAllowedBroker()
-  {
-   if(TesterFastMode())
-      return(true);
-
-   string broker = AccountInfoString(ACCOUNT_COMPANY);
-
-   // allow only brokers whose name contains "AxiCorp" or at least "Axi"
-   if(StringFind(broker, "AxiCorp") >= 0 || StringFind(broker, "Axi") >= 0)
-      return(true);
-
-   MessageBox(
-      "You are using the wrong broker for this AI trading system.\n\n"
-      "Please contact our support team: support@allintraders.pl",
-      "Broker restriction",
-      MB_ICONERROR
-   );
-
-   Print("Broker restriction: EA disabled. Broker company = '", broker,
-         "' (required substring: 'AxiCorp' or 'Axi').");
-
-   return(false);
-  }
 
 //============================== INIT/DEINIT ==============================
 int OnInit()
@@ -393,12 +368,12 @@ void OnTick()
    CheckAndCloseLocalTPs();
    CleanUpClosedPositions();
 
-   if(baseScenerioCSellOrder >0 && OrderSelect(baseScenerioCSellOrder,SELECT_BY_TICKET))
+   if(baseScenarioCSellOrder >0 && OrderSelect(baseScenarioCSellOrder,SELECT_BY_TICKET))
      {
       if(OrderCloseTime() != 0)
         {
-         scenerioCSellActive = false;
-         baseScenerioCSellOrder = 0;
+         scenarioCSellActive = false;
+         baseScenarioCSellOrder = 0;
          cAvgCountSell = 0;
          cBaseSellPrice = 0.0;
          cBaseSellLot   = 0.0;
@@ -406,12 +381,12 @@ void OnTick()
          ArrayResize(cAvgsSell, 0);
         }
      }
-   if(baseScenerioCBuyOrder >0 && OrderSelect(baseScenerioCBuyOrder,SELECT_BY_TICKET))
+   if(baseScenarioCBuyOrder >0 && OrderSelect(baseScenarioCBuyOrder,SELECT_BY_TICKET))
      {
       if(OrderCloseTime() != 0)
         {
-         scenerioCBuyActive = false;
-         baseScenerioCBuyOrder = 0;
+         scenarioCBuyActive = false;
+         baseScenarioCBuyOrder = 0;
          cAvgCountBuy = 0;
          cBaseBuyPrice = 0.0;
          cBaseBuyLot   = 0.0;
@@ -433,7 +408,7 @@ void OnTick()
       SaveTickBucketsToFile();
      }
 
-// co godzinę – sprawdź wczoraj
+// every hour – check yesterday
    static datetime last_hist = 0;
    if(now - last_hist >= 3600)
      {
@@ -463,7 +438,7 @@ void OnTick()
      }
   }
 
-//==================== Pomocnicze – tolerancja dotknięcia ====================
+//==================== Helpers – touch tolerance =============================
 double TouchTolerance()
   {
    string s = Symbol();
@@ -490,7 +465,7 @@ bool FindFirstTouch(datetime from, datetime to, double price, datetime &touch_ou
    if(to <= from)
       to = from + 60;
    MqlRates r[];
-   int bars = CopyRates(Symbol(), PERIOD_M1, from+1, to, r); // +1s by uniknąć natychmiast
+   int bars = CopyRates(Symbol(), PERIOD_M1, from+1, to, r); // +1s to avoid instant match
    if(bars <= 0)
       return false;
    ArraySetAsSeries(r,false);
@@ -505,7 +480,7 @@ bool FindFirstTouch(datetime from, datetime to, double price, datetime &touch_ou
      }
    return false;
   }
-//============================== Parametry symbolu ========================
+//============================== Symbol parameters ========================
 void CalculateSymbolParameters()
   {
    symbol_point = Point;
@@ -553,7 +528,7 @@ void AddLevel(datetime start_time, double price, string color_name, color line_c
    levels_count++;
   }
 
-//============================== TICK CLUSTERS (trwałe) ====================
+//============================== TICK CLUSTERS (persistent) ================
 struct TickBucket
   {
    double            price_bin;
@@ -629,7 +604,7 @@ void ResetTickBucketsIfNeeded()
       last_bucket_day = dt.day;
    if(dt.day != last_bucket_day)
      {
-      // zabezpiecz: zapisz stan „starego dnia” i wyczyść
+      // safeguard: save "old day" state and clear
       if(PersistTickAcrossTF)
          SaveTickBucketsToFile();
       ResetAllTickBuckets();
@@ -659,7 +634,7 @@ void CreateDirectionArrow(datetime t, double price, int dir /*1=buy,-1=sell*/)
                               TimeToString(t, TIME_DATE|TIME_MINUTES|TIME_SECONDS),
                               (int)(price*10000));
 
-// offset strzałki
+// arrow offset
    double offset = TickArrowOffset * DefaultBinSize();
    double y = price;
    int arrowCode = 0;
@@ -691,12 +666,12 @@ void CreateTickLevel(datetime t, double price, int dir /*1 buy, -1 sell, 0 neutr
    string tag = (dir>0 ? "TickBuy" : (dir<0 ? "TickSell" : "Tick"));
    AddLevel(t, price, tag, TickColor, TickWidth, TickStyle, (ENUM_TIMEFRAMES)Period());
 
-// Strzałka kierunku
+// Direction arrow
    if(dir!=0)
      {
       CreateDirectionArrow(t, price, dir);
       int marketDirection = MarketSlopeSignal(Symbol(),0,maPeriod,slopeLookbackBars,slopeThresholdPts);
-   
+
       if(TimeCurrent() > startHour && TimeCurrent() < endHour)
         {
          if(dir < 0 && marketDirection <= 0)
@@ -710,11 +685,11 @@ void CreateTickLevel(datetime t, double price, int dir /*1 buy, -1 sell, 0 neutr
         }
      }
 
-// Jeśli nie "until done" — kończ po N świecach
+// If not "until done" — end after N candles
    if(!TickUntilDone)
      {
       int ps = PeriodSeconds(Period());
-      datetime start_bar = iTime(Symbol(), Period(), 1); // ostatnia zamknięta świeca
+      datetime start_bar = iTime(Symbol(), Period(), 1); // last closed candle
       datetime end_t = start_bar + (ps * TickExtendBars);
       int idx = levels_count - 1;
       if(idx >= 0)
@@ -736,7 +711,7 @@ void ProcessTickBuckets()
       return;
      }
 
-   double price = Bid; // można (Bid+Ask)/2
+   double price = Bid; // could also use (Bid+Ask)/2
    double bin   = BinPrice(price);
    datetime now = TimeCurrent();
 
@@ -760,12 +735,12 @@ void ProcessTickBuckets()
       tick_buckets[idx].last_time = now;
      }
 
-// Jeżeli przekroczył próg – twórz poziom (jeśli go jeszcze nie ma)
+// If threshold exceeded – create level (unless one exists)
    if(!tick_buckets[idx].level_created && tick_buckets[idx].count >= TickMinCount)
      {
       if(!LevelExistsNear(bin))
         {
-         // Kierunek: obecny tick vs poprzedni tick
+         // Direction: current tick vs previous tick
          int dir = 0;
          if(g_lastTickPrice > 0.0)
            {
@@ -781,11 +756,11 @@ void ProcessTickBuckets()
         }
      }
 
-// aktualizuj „ostatni tick”
+// update "last tick"
    g_lastTickPrice = price;
   }
 
-//============================== Trwałość: zapis/odczyt CSV ===============
+//============================== Persistence: CSV read/write =============
 void SaveTickBucketsToFile()
   {
    if(TesterFastMode())
@@ -843,11 +818,11 @@ void OpenPositions(double price, int direction)
      {
       if(TimeCurrent() > (positionSellTime + timeFilter))
         {
-         if(scenerioC == true && scenerioCSellActive == true)
+         if(scenarioC == true && scenarioCSellActive == true)
            {
             if(direction < 0)
               {
-               CallScenerioC(1);
+               CallScenarioC(1);
               }
            }
 
@@ -879,24 +854,24 @@ void OpenPositions(double price, int direction)
            {
             if(direction < 0)
               {
-               if(scenerioA == true)
-                  CallScenerioA(1); //Buy = 0 , Sell = 1
-               if(scenerioB == true)
-                  CallScenerioB(1);
-               if(scenerioC == true && scenerioCSellActive == false)
-                  CallScenerioC(1);
-               if(scenerioD == true)
-                  CallScenerioD(1);
+               if(scenarioA == true)
+                  CallScenarioA(1); //Buy = 0 , Sell = 1
+               if(scenarioB == true)
+                  CallScenarioB(1);
+               if(scenarioC == true && scenarioCSellActive == false)
+                  CallScenarioC(1);
+               if(scenarioD == true)
+                  CallScenarioD(1);
               }
            }
         }
       if(TimeCurrent() > (positionBuyTime + timeFilter))
         {
-         if(scenerioC == true && scenerioCBuyActive == true)
+         if(scenarioC == true && scenarioCBuyActive == true)
            {
             if(direction > 0)
               {
-               CallScenerioC(0);
+               CallScenarioC(0);
               }
            }
 
@@ -926,14 +901,14 @@ void OpenPositions(double price, int direction)
            {
             if(direction > 0)
               {
-               if(scenerioA == true)
-                  CallScenerioA(0);
-               if(scenerioB == true)
-                  CallScenerioB(0);
-               if(scenerioC == true && scenerioCBuyActive == false)
-                  CallScenerioC(0);
-               if(scenerioD == true)
-                  CallScenerioD(0);
+               if(scenarioA == true)
+                  CallScenarioA(0);
+               if(scenarioB == true)
+                  CallScenarioB(0);
+               if(scenarioC == true && scenarioCBuyActive == false)
+                  CallScenarioC(0);
+               if(scenarioD == true)
+                  CallScenarioD(0);
               }
            }
         }
@@ -1060,7 +1035,7 @@ double NormalizeLots(double lots)
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-double RequiredLotForBEPlusX(int direction, double p1, double l1, double p2, double tpPrice, int xPoints) // Only for Scenerio A
+double RequiredLotForBEPlusX(int direction, double p1, double l1, double p2, double tpPrice, int xPoints) // Only for Scenario A
   {
 
    double minLot = MarketInfo(Symbol(), MODE_MINLOT);
@@ -1086,7 +1061,7 @@ double RequiredLotForBEPlusX(int direction, double p1, double l1, double p2, dou
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void CallScenerioA(int buyORsell)
+void CallScenarioA(int buyORsell)
   {
    if(buyORsell == 1)
      {
@@ -1146,7 +1121,7 @@ void CallScenerioA(int buyORsell)
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void CallScenerioB(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
+void CallScenarioB(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
   {
    RefreshRates();
 
@@ -1192,11 +1167,11 @@ void CallScenerioB(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
+void CallScenarioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
   {
    RefreshRates();
 
-// 1) Zidentyfikuj / zapamiętaj bazę (ticket + cena + lot)
+// 1) Identify / remember base (ticket + price + lot)
    int basePos = FindOldestOpenOrder(dir);
    if(basePos < 0 || !OrderSelect(basePos, SELECT_BY_POS, MODE_TRADES))
       return;
@@ -1205,24 +1180,24 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
    cBasePrice = OrderOpenPrice();
    cBaseLot   = OrderLots();
 
-   if(baseScenerioCSellOrder == 0 && scenerioCSellActive == false)
+   if(baseScenarioCSellOrder == 0 && scenarioCSellActive == false)
      {
       if(dir == 1)
         {
-         baseScenerioCSellOrder = cBaseTk;   // zachowujemy zgodność z dotychczasowym polem
-         scenerioCSellActive = true;
+         baseScenarioCSellOrder = cBaseTk;   // keep compat with existing field
+         scenarioCSellActive = true;
          cBaseSellPrice = cBasePrice;
          cBaseSellLot   = cBaseLot;
          cBaseSellTk    = cBaseTk;
 
         }
      }
-   if(baseScenerioCBuyOrder == 0 && scenerioCBuyActive == false)
+   if(baseScenarioCBuyOrder == 0 && scenarioCBuyActive == false)
      {
       if(dir == 0)
         {
-         baseScenerioCBuyOrder = cBaseTk;   // zachowujemy zgodność z dotychczasowym polem
-         scenerioCBuyActive = true;
+         baseScenarioCBuyOrder = cBaseTk;   // keep compat with existing field
+         scenarioCBuyActive = true;
          cBaseBuyPrice = cBasePrice;
          cBaseBuyLot   = cBaseLot;
          cBaseBuyTk    = cBaseTk;
@@ -1232,7 +1207,7 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
 
    double px_now = (dir==OP_BUY ? Ask : Bid);
 
-// --- referencja „ostatniego uśrednienia” z własnej tablicy
+// --- reference to "last averaging" from own array
    double lastRef = cBasePrice;
    if(dir==OP_BUY)
      {
@@ -1251,7 +1226,7 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
 
    double lotBase = NormalizeLots(cBaseLot);
    double lotQual = lotBase;
-// jeśli mamy jakieś uśrednienie, weź ostatni lot jako referencję do 1.5x
+// if any averaging exists, use last lot as reference for 1.5x
    if(dir==OP_BUY && cAvgCountBuy>0)
       lotQual = NextLotByMultiplier(cAvgsBuy[cAvgCountBuy-1].lot);
    if(dir==OP_SELL && cAvgCountSell>0)
@@ -1274,7 +1249,7 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
 // --- TP
    if(farther)
      {
-      // dodaj do własnej tablicy uśrednień
+      // add to own averaging array
       if(OrderSelect(tk, SELECT_BY_TICKET))
         {
          if(dir==OP_BUY)
@@ -1296,7 +1271,7 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
             cAvgCountSell=n+1;
            }
         }
-      // grupowy BE+X: baza + własne uśrednienia (tej strony)
+      // group BE+X: base + own averages (this side)
       int tks[];
       int n=0;
       ArrayResize(tks, 1);
@@ -1324,7 +1299,7 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
      }
    else
      {
-      // NEAR: własny TP (nie wchodzi do koszyka)
+      // NEAR: own TP (not part of basket)
       if(OrderSelect(tk, SELECT_BY_TICKET))
         {
          double rawTP = (dir==OP_BUY ? OrderOpenPrice()+tpRange*Point
@@ -1342,7 +1317,7 @@ void CallScenerioC(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-void CallScenerioD(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
+void CallScenarioD(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
   {
 
    int basePos = FindOldestOpenOrder(dir);
@@ -1410,14 +1385,14 @@ void CallScenerioD(int dir)  // OP_BUY (=0) lub OP_SELL (=1)
    int n = CollectGroupAll_NoComments(dir, tickets);
    if(n >= 2)
      {
-      double groupTP = GroupTP_BEPlusX_All(dir, tickets, bePoints); // ma clamp na stop/freeze
+      double groupTP = GroupTP_BEPlusX_All(dir, tickets, bePoints); // clamped against stop/freeze
       if(groupTP > 0)
          for(int i=0; i<n; ++i)
             SetTP(tickets[i], groupTP);
      }
   }
 //+------------------------------------------------------------------+
-// Zbiera WSZYSTKIE pozycje (symbol + magic + kierunek)              |
+// Collects ALL positions (symbol + magic + direction)               |
 //+------------------------------------------------------------------+
 int CollectGroupAll_NoComments(int dir, int &tickets[])
   {
@@ -1435,7 +1410,7 @@ int CollectGroupAll_NoComments(int dir, int &tickets[])
    return ArraySize(tickets);
   }
 //+------------------------------------------------------------------+
-//| Najdalsza pozycja od bazy (po dystansie); zwraca ticket i d_max   |
+//| Farthest position from base (by distance); returns ticket + d_max |
 //+------------------------------------------------------------------+
 int FindFarthestTicket_NoComments(int dir, double basePrice, double &dmax_out)
   {
@@ -1456,7 +1431,7 @@ int FindFarthestTicket_NoComments(int dir, double basePrice, double &dmax_out)
   }
 
 //+------------------------------------------------------------------+
-//| Ostatnia nie-bazowa (najświeższa poza bazą) – referencja dla 1.5×|
+//| Last non-base (newest beyond base) – reference for 1.5x          |
 //+------------------------------------------------------------------+
 int FindLastNonBaseTicket(int dir)
   {
@@ -1486,7 +1461,7 @@ int FindLastNonBaseTicket(int dir)
 
 
 //+------------------------------------------------------------------+
-//| PROG kwalifikacji dla Scen C – Global Variables (no-comment     )|
+//| Qualification THRESHOLD for Scenario C – Global Variables        |
 //+------------------------------------------------------------------+
 string GVKeyC_Threshold(int dir)
   {
@@ -1509,7 +1484,7 @@ void SetC_Threshold(int dir, double thr)
   {
    GlobalVariableSet(GVKeyC_Threshold(dir), thr);
   }
-// Reset progu, jeśli koszyk domknięty (brak pozycji >= thr)
+// Reset threshold if basket closed (no position >= thr)
 void ResetC_ThresholdIfNeeded(int dir, double basePrice)
   {
    double thr = GetC_Threshold(dir);
@@ -1536,7 +1511,7 @@ void ResetC_ThresholdIfNeeded(int dir, double basePrice)
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-double NextLotByMultiplier(double baseLot) // Only Scenerio B
+double NextLotByMultiplier(double baseLot) // Only Scenario B
   {
    double step   = MarketInfo(Symbol(), MODE_LOTSTEP);
    double minLot = MarketInfo(Symbol(), MODE_MINLOT);
@@ -1562,7 +1537,7 @@ double NextLotByMultiplier(double baseLot) // Only Scenerio B
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-bool SetTP(int ticket, double newTP) // Scenerio B only
+bool SetTP(int ticket, double newTP) // Scenario B only
   {
    if(ticket<=0)
       return false;
@@ -1651,7 +1626,7 @@ bool isNewM15Candle()
 //+------------------------------------------------------------------+
 
 
-// ============== LOGIKA i FUNKCJE STREF ============================
+// ============== ZONES: LOGIC AND FUNCTIONS ========================
 string PeriodToStr(int p)
   {
    if(p==PERIOD_M1)
@@ -1675,7 +1650,7 @@ string PeriodToStr(int p)
    return IntegerToString(p);
   }
 
-// === FUNKCJE 1:1 z Twojego pliku ===
+// === FUNCTIONS 1:1 from source file ===
 double TR_i(int i)
   {
    double tr1=High[i]-Low[i];
@@ -1698,7 +1673,7 @@ double highest_forward(const double &series[],int length1,int i)
    double max = series[i];
    int ub = MathMin(i+length1, ArraySize(series)-1);                             // UWAGA: ArraySize-1
    for(int k=i+1; k<ub; k++)
-      max = MathMax(max, series[k]);                      // ścisłe '<'
+      max = MathMax(max, series[k]);                      // strict '<'
    return max;
   }
 //+------------------------------------------------------------------+
@@ -1709,7 +1684,7 @@ double lowest_forward(const double &series[],int length1,int i)
    double min = series[i];
    int ub = MathMin(i+length1, ArraySize(series)-1);
    for(int k=i+1; k<ub; k++)
-      min = MathMin(min, series[k]);                      // ścisłe '<'
+      min = MathMin(min, series[k]);                      // strict '<'
    return min;
   }
 //+------------------------------------------------------------------+
@@ -1722,10 +1697,10 @@ double pivothigh_close(const double &arr[],int left,int right,int i)
    double pivot = arr[i+right];
    for(int j=1; j<=left; j++)
       if(pivot < arr[i+right+j])
-         return 0.0;            // tylko '<'
+         return 0.0;            // strict '<'
    for(int j=1; j<=right; j++)
       if(pivot < arr[i+right-j])
-         return 0.0;            // tylko '<'
+         return 0.0;            // strict '<'
    return pivot;
   }
 //+------------------------------------------------------------------+
@@ -1738,13 +1713,13 @@ double pivotlow_close(const double &arr[],int left,int right,int i)
    double pivot = arr[i+right];
    for(int j=1; j<=left; j++)
       if(pivot > arr[i+right+j])
-         return 0.0;            // tylko '>'
+         return 0.0;            // strict '>'
    for(int j=1; j<=right; j++)
       if(pivot > arr[i+right-j])
-         return 0.0;            // tylko '>'
+         return 0.0;            // strict '>'
    return pivot;
   }
-// === GŁÓWNA LOGIKA — co tick, 1:1, bez rysowania ===
+// === MAIN LOGIC — every tick, 1:1, no drawing ===
 bool AISupportResistance()
   {
    int bars=Bars;
@@ -1776,7 +1751,7 @@ bool AISupportResistance()
 
       // skumulowany delta-wolumen — tick_volume (doji i wzrost = buy)
       long tv = iVolume(NULL, 0, i);
-      bool isBuyVolume = (Close[i] >= Open[i]);   // wskaźnik ustawia true poza przypadkiem Close<Open
+      bool isBuyVolume = (Close[i] >= Open[i]);   // indicator sets true except when Close<Open
       posVol[i]=0.0;
       negVol[i]=0.0;
       if(isBuyVolume)
@@ -1785,7 +1760,7 @@ bool AISupportResistance()
          negVol[i]=negVol[i+1] - tv;
       Vol[i]=posVol[i] + negVol[i];
 
-      // progi (okno w prawo z '<' i limitem ArraySize-1)
+      // thresholds (right window with '<' and ArraySize-1 limit)
       double vol_hi = highest_forward(Vol, vol_len, i) / 2.5;
       double vol_lo = lowest_forward(Vol, vol_len, i) / 2.5;
 
@@ -1793,7 +1768,7 @@ bool AISupportResistance()
       double pHigh = pivothigh_close(Close, lookbackPeriod, lookbackPeriod, i);
       double pLow  = pivotlow_close(Close, lookbackPeriod, lookbackPeriod, i);
 
-      // szerokość
+      // width
       double width = atr[i] * box_withd;
 
       // wsparcie
@@ -1810,7 +1785,7 @@ bool AISupportResistance()
             supW=width;
            }
         }
-      // opór
+      // resistance
       if(pHigh!=0.0 && Vol[i] < vol_lo)
         {
          datetime t = Time[i+lookbackPeriod];
@@ -1854,9 +1829,9 @@ bool AISupportResistance()
 // ----------------------------------------------------------------------------------
 double ProfitForDay(datetime day, int _magic = -1, string symbol = "")
   {
-// Ustalenie zakresu czasu dla danego dnia w czasie serwera
-   datetime start = StringToTime(TimeToString(day, TIME_DATE)); // północ tego dnia
-   datetime end   = start + 86400;                              // następny dzień
+// Set time range for the given day in server time
+   datetime start = StringToTime(TimeToString(day, TIME_DATE)); // midnight of that day
+   datetime end   = start + 86400;                              // next day
 
    double sum = 0.0;
    int total = OrdersHistoryTotal();
@@ -1866,7 +1841,7 @@ double ProfitForDay(datetime day, int _magic = -1, string symbol = "")
       if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
          continue;
 
-      // bierzemy tylko faktycznie zamknięte transakcje z tego dnia
+      // only take actually closed trades from this day
       datetime ct = OrderCloseTime();
       if(ct >= start && ct < end)
         {
@@ -1881,14 +1856,14 @@ double ProfitForDay(datetime day, int _magic = -1, string symbol = "")
   }
 
 //=================================================
-// Funkcja: Pokazuje profit z zamkniętych pozycji |
-//   między dwiema ostatnimi zamkniętymi świecami |
+// Function: Shows profit from closed positions |
+//   between two recently closed candles         |
 //=================================================
 void ShowClosedProfitBottom2TF()
   {
    if(TesterFastMode())
       return;
-// --- wyznacz TF o dwa stopnie wyżej ---
+// --- determine TF two steps higher ---
    int tf;
    switch(Period())
      {
@@ -1915,10 +1890,10 @@ void ShowClosedProfitBottom2TF()
          break; // D1 -> MN1
       case PERIOD_W1:
          tf = PERIOD_MN1;
-         break; // W1 -> MN1 (brak wyżej)
+         break; // W1 -> MN1 (nothing higher)
       case PERIOD_MN1:
          tf = PERIOD_MN1;
-         break; // już najwyższy
+         break; // already the highest
       default:
          tf = PERIOD_H1;
          break;
@@ -1928,12 +1903,12 @@ void ShowClosedProfitBottom2TF()
    if(bars <= 0)
       return;
 
-// --- tablica sum profitów dla świec tf ---
+// --- profit-sum array for tf candles ---
    double profitByBar[];
    ArrayResize(profitByBar, bars);
    ArrayInitialize(profitByBar, 0.0);
 
-// --- zlicz zamknięte zlecenia bieżącego symbolu ---
+// --- count closed orders for current symbol ---
    for(int i = OrdersHistoryTotal() - 1; i >= 0; i--)
      {
       if(!OrderSelect(i, SELECT_BY_POS, MODE_HISTORY))
@@ -1951,7 +1926,7 @@ void ShowClosedProfitBottom2TF()
       profitByBar[sh] += p;
      }
 
-// --- usuń stare etykiety z tej funkcji ---
+// --- remove old labels from this function ---
    int tot = ObjectsTotal(0,0,-1);
    for(int o = tot-1; o >= 0; o--)
      {
@@ -1960,14 +1935,14 @@ void ShowClosedProfitBottom2TF()
          ObjectDelete(0, nm);
      }
 
-// --- pozycja pionowa (stabilnie przy dole okna) ---
+// --- vertical position (stable near window bottom) ---
    double pMin = WindowPriceMin();
    double pMax = WindowPriceMax();
    if(pMax <= pMin)
       return;
-   double y = pMin + (pMax - pMin) * 0.04; // ~2% nad dołem
+   double y = pMin + (pMax - pMin) * 0.04; // ~2% above bottom
 
-// --- sekundy TF do wyznaczenia środka świecy ---
+// --- TF seconds to place label at candle midpoint ---
    int tfSec;
    switch(tf)
      {
@@ -2003,7 +1978,7 @@ void ShowClosedProfitBottom2TF()
          break;
      }
 
-// --- rysuj wartości tylko tam, gdzie suma != 0 ---
+// --- draw values only where sum != 0 ---
    for(int sh = 0; sh < bars; sh++)
      {
       if(MathAbs(profitByBar[sh]) < 0.00001)
@@ -2027,15 +2002,15 @@ void ShowClosedProfitBottom2TF()
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
-// ==== STAŁE NAZW ====
+// ==== NAME CONSTANTS ====
 #define TBL_BG   "Tbl_BG"
 #define TBL_PFX  "Tbl_"
 
-// ==== POMOCNICZE ====
+// ==== HELPERS ====
 bool IsRight(int corner) { return (corner==CORNER_RIGHT_UPPER || corner==CORNER_RIGHT_LOWER); }
 bool IsLower(int corner) { return (corner==CORNER_LEFT_LOWER  || corner==CORNER_RIGHT_LOWER); }
 
-// Uniwersalne ustawienie OBJ_LABEL w panelu (zawsze ANCHOR_LEFT_UPPER)
+// Universal OBJ_LABEL placement in panel (always ANCHOR_LEFT_UPPER)
 void PlaceLabelInPanel(const string name, int corner, int panelW, int panelH,
                        int edgeX, int edgeY, int xIn, int yIn,
                        const string text, color clr, int fontSize)
@@ -2060,7 +2035,7 @@ void PlaceLabelInPanel(const string name, int corner, int panelW, int panelH,
 #endif
   }
 
-// Tło panelu (OBJ_RECTANGLE_LABEL) – pozycjonowane jak wyżej
+// Panel background (OBJ_RECTANGLE_LABEL) – positioned same as above
 void DrawTableBackground(int corner, int panelW, int panelH, int edgeX, int edgeY, color bg)
   {
    int x = IsRight(corner) ? (edgeX + panelW) : edgeX;
@@ -2084,12 +2059,12 @@ void DrawTableBackground(int corner, int panelW, int panelH, int edgeX, int edge
 #endif
   }
 
-// ================== GŁÓWNA FUNKCJA ==================
+// ================== MAIN FUNCTION ==================
 void DrawClosedProfitTableGridInputs()
   {
    if(TesterFastMode())
       return;
-// --- rozmiary zależne od trybu (normal/small)
+// --- sizes depend on mode (normal/small)
    double scale = (TblSize==SIZE_SMALL ? 0.5 : 1.0);
 
    int panelW   = (int)MathRound(360 * scale);
@@ -2098,11 +2073,11 @@ void DrawClosedProfitTableGridInputs()
    int padInX   = (int)MathRound(10 * scale);
    int padInY   = (int)MathRound(10 * scale);
 
-// margines od krawędzi okna (Y większy na dole, by nie nachodzić na oś czasu)
+// window edge margin (Y larger at bottom to avoid overlapping time axis)
    int edgeX = 14;
    int edgeY = IsLower(TblCorner) ? 50 : 14;
 
-// --- policz zamknięcia (bieżący symbol)
+// --- count closures (current symbol)
    int buyCnt=0, sellCnt=0;
    double buySum=0.0, sellSum=0.0;
 
@@ -2149,7 +2124,7 @@ void DrawClosedProfitTableGridInputs()
         }
      }
 
-// --- usuń stare obiekty panelu
+// --- remove old panel objects
    for(int k=ObjectsTotal(0,0,-1)-1; k>=0; --k)
      {
       string nm=ObjectName(0,k);
@@ -2157,10 +2132,10 @@ void DrawClosedProfitTableGridInputs()
          ObjectDelete(0,nm);
      }
 
-// --- tło
+// --- background
    DrawTableBackground(TblCorner, panelW, panelH, edgeX, edgeY, TblBgColor);
 
-// --- pozycje komórek (od LEWEJ/GÓRY panelu)
+// --- cell positions (from LEFT/TOP of panel)
    int c1 = padInX;                       // Label
    int c2 = padInX + (int)MathRound(120*scale); // Count
    int c3 = padInX + (int)MathRound(220*scale); // Amount
@@ -2172,9 +2147,9 @@ void DrawClosedProfitTableGridInputs()
    int r4 = r3 + (int)MathRound(40*scale);
    int r5 = r4 + (int)MathRound(28*scale);
 
-   color fontClr = TblFontColor;  // jeden kolor dla całej tabeli
+   color fontClr = TblFontColor;  // single color for whole table
 
-// --- komórki
+// --- cells
    PlaceLabelInPanel(TBL_PFX+"r0c1",TblCorner,panelW,panelH,edgeX,edgeY,c1,r0,"ALLin-MoE-LLM",   fontClr,fontSz);
    PlaceLabelInPanel(TBL_PFX+"r0c3",TblCorner,panelW,panelH,edgeX,edgeY,c3,r0,"connected",fontClr,fontSz);
 
@@ -2201,18 +2176,18 @@ void DrawClosedProfitTableGridInputs()
   }
 
 //+------------------------------------------------------------------+
-//--- Struktura do przechowywania danych o pozycji i lokalnym TP
+//--- Struct for holding position data and local TP
 struct LocalOrders
   {
-   int               ticket;         // Numer ticketa pozycji
-   double            localTP;        // Cena Take Profit zarządzana lokalnie
-   int               order_type;     // Typ pozycji (OP_BUY/OP_SELL)
+   int               ticket;         // Position ticket number
+   double            localTP;        // Locally managed Take Profit price
+   int               order_type;     // Position type (OP_BUY/OP_SELL)
   };
 
-LocalOrders localOrders[]; // Globalna tablica do przechowywania lokalnych TP
+LocalOrders localOrders[]; // Global array for storing local TPs
 
 //+------------------------------------------------------------------+
-//| Dodaje lub aktualizuje pozycję w tablicy lokalnych TP           |
+//| Adds or updates a position in the local TP array                |
 //+------------------------------------------------------------------+
 void AddOrUpdateLocalTP(int ticket, double tp_price, int type)
   {
@@ -2222,7 +2197,6 @@ void AddOrUpdateLocalTP(int ticket, double tp_price, int type)
       if(localOrders[i].ticket == ticket)
         {
          localOrders[i].localTP = tp_price;
-         //Print("Lokalny TP dla ticketa ", ticket, " zaktualizowany do ", DoubleToStr(tp_price, Digits));
          return;
         }
      }
@@ -2232,11 +2206,10 @@ void AddOrUpdateLocalTP(int ticket, double tp_price, int type)
    localOrders[new_size].ticket = ticket;
    localOrders[new_size].localTP = tp_price;
    localOrders[new_size].order_type = type;
-//Print("Lokalny TP dla ticketa ", ticket, " dodany: ", DoubleToStr(tp_price, Digits));
   }
 
 //+------------------------------------------------------------------+
-//| Usuwa pozycję z tablicy lokalnych TP                             |
+//| Removes a position from the local TP array                       |
 //+------------------------------------------------------------------+
 void RemoveLocalTP(int ticket)
   {
@@ -2249,14 +2222,13 @@ void RemoveLocalTP(int ticket)
             localOrders[j] = localOrders[j+1];
            }
          ArrayResize(localOrders, ArraySize(localOrders) - 1);
-         //  Print("Lokalny TP dla ticketa ", ticket, " usunięty.");
          return;
         }
      }
   }
 
 //+------------------------------------------------------------------+
-//| Sprawdza i zamyka pozycje na podstawie lokalnych TP.             |
+//| Checks and closes positions based on local TPs.                  |
 //+------------------------------------------------------------------+
 void CheckAndCloseLocalTPs()
   {
@@ -2289,18 +2261,17 @@ void CheckAndCloseLocalTPs()
         {
          if(OrderClose(ticket, OrderLots(), (type == OP_BUY ? Bid : Ask), 3, clrRed))
            {
-            // Print("Pozycja ", ticket, " zamknięta lokalnie przez TP.");
            }
          else
            {
-            Print("Błąd zamykania pozycji ", ticket, ": ", GetLastError());
+            Print("Error closing position ", ticket, ": ", GetLastError());
            }
         }
      }
   }
 
 //+------------------------------------------------------------------+
-//| Usuwa zamknięte pozycje z lokalnej listy.                        |
+//| Removes closed positions from the local list.                    |
 //+------------------------------------------------------------------+
 void CleanUpClosedPositions()
   {
@@ -2346,7 +2317,7 @@ void SavePositionData()
      }
    else
      {
-      Print("Błąd zapisu pliku: ", GetLastError());
+      Print("File write error: ", GetLastError());
      }
   }
 //+------------------------------------------------------------------+
@@ -2367,9 +2338,9 @@ void ReadPositionData()
         {
          string line = FileReadString(fileHandle);
          if(line == "")
-            continue;  // Pomijamy puste linie
+            continue;  // skip empty lines
 
-         // Podziel linię na części (mfaOrder, mt4Ticket, lot, price, comment)
+         // split line into parts (ticket, tp, type)
          string parts[];
          int count = StringSplit(line, ' ', parts);
 
@@ -2386,7 +2357,7 @@ void ReadPositionData()
      }
    else
      {
-      Print("Błąd odczytu pliku: ", GetLastError());
+      Print("File read error: ", GetLastError());
      }
   }
 //+------------------------------------------------------------------+
@@ -2457,16 +2428,16 @@ bool IsTradingTime()
      {
       int idx = d*3 + i;
 
-      if(Start[idx] == End[idx])   // set wyłączony?
+      if(Start[idx] == End[idx])   // set disabled?
          continue;
 
       int s = ToMinutes(Start[idx]);
       int e = ToMinutes(End[idx]);
 
-      if(s < 0 || e < 0)           // śmieci typu 195, 2399, 2400 → pomijamy ten set
+      if(s < 0 || e < 0)           // garbage like 195, 2399, 2400 → skip this set
          continue;
 
-      if(s >= e)                   // nie pozwalamy na nocne okno
+      if(s >= e)                   // don't allow overnight windows
          return(false);
 
       if(last != -1 && s < last)   // set2 >= end1, set3 >= end2
@@ -2476,14 +2447,14 @@ bool IsTradingTime()
       any  = true;
      }
 
-   return(any);                    // true = w tym dniu są poprawne sety
+   return(any);                    // true = this day has valid sets
   }
 //+------------------------------------------------------------------+
 //|                                                                  |
 //+------------------------------------------------------------------+
 void UpdateStartEndFromSets()
   {
-// jeśli dzień już zatrzymany przez dailyProfit/dailyLost – nie ruszamy okna
+// if day already stopped by dailyProfit/dailyLost – don't touch window
    if(gTradingStoppedToday)
       return;
 
@@ -2524,14 +2495,14 @@ void UpdateStartEndFromSets()
       lastS = s;
       lastE = e;
 
-      if(curMin >= s && curMin < e)   // jesteśmy w środku tego seta
+      if(curMin >= s && curMin < e)   // we're inside this set
         {
          curS = s;
          curE = e;
-         break;                       // dalsze nas nie interesują
+         break;                       // the rest don't matter
         }
 
-      if(curMin < s && nextS == -1)   // pierwszy set w przyszłości
+      if(curMin < s && nextS == -1)   // first upcoming set
         {
          nextS = s;
          nextE = e;
@@ -2542,24 +2513,24 @@ void UpdateStartEndFromSets()
 
    int useS=-1, useE=-1;
 
-   if(curS != -1)          // aktualne okno
+   if(curS != -1)          // current window
      {
       useS = curS;
       useE = curE;
      }
    else
-      if(nextS != -1)    // przed kolejnym oknem
+      if(nextS != -1)    // before next window
         {
          useS = nextS;
          useE = nextE;
         }
       else
-         if(lastS != -1)    // po wszystkich – trzymaj ostatnie okno (dla autoCloseTrigger)
+         if(lastS != -1)    // past all – keep last window (for autoCloseTrigger)
            {
             useS = lastS;
             useE = lastE;
            }
-         else                    // brak poprawnych setów (teoretycznie IsTradingTime() zwróci wtedy false)
+         else                    // no valid sets (IsTradingTime() should return false)
            {
             startHour = 0;
             endHour   = 0;
