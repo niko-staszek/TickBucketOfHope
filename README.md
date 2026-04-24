@@ -1,8 +1,13 @@
 # tickBucketOfHope
 
-Tick-density entry EA for MT4 with four selectable martingale/averaging scenarios, a locally-managed basket TP, a per-day-of-week session filter, and an on-chart dashboard for Positions + Controls.
+Tick-density entry EA for **MT4 and MT5** with four selectable martingale/averaging scenarios, a basket TP, a per-day-of-week session filter, and an on-chart dashboard for Positions + Controls.
 
 The mechanism: **count ticks in price bins, enter when a bin's count crosses a threshold, manage the resulting basket with one of four martingale/averaging strategies.**
+
+- **MT4 version**: `TickBucketMartingale.mq4` + `TickBucketMartingale.set` at repo root.
+- **MT5 version**: `mt5/TickBucketMartingale/` — see [`mt5/TickBucketMartingale/README.md`](mt5/TickBucketMartingale/README.md) for MT5-specific notes and install path.
+
+Both versions are behaviorally 1:1 aside from platform-forced differences (listed below). This repo is the **bare port**; experimental work (dynamic lot sizing, scenario combos, extra safeties) lives in the sibling `TickBucketOfWisdom` repo.
 
 ---
 
@@ -86,6 +91,23 @@ Button clicks route through both `OnChartEvent` (instant) and `OnTick` polling (
 
 ---
 
+## MT4 vs MT5 — what's different
+
+Same algorithm, same scenarios, same dashboard. Forced platform deltas:
+
+| | MT4 | MT5 |
+|---|---|---|
+| Account type | Any | **Hedging only** (EA refuses netting accounts in `OnInit`). |
+| Take-profit mechanism | Local TP table (`positions_backup_<symbol>_<login>.txt`) | Real broker-side position TPs via `TRADE_ACTION_SLTP`. |
+| `magic` input name | `magic` | `MagicNumber` (MT5 standard library uses `magic` internally). |
+| `aiZone` input name | `aiZone` | `useSRZones` (renamed — it's not AI, it's a volume-weighted pivot detector). |
+| `AISupportResistance()` | same name | Renamed to `DetectSRZones()` for accuracy. |
+| Tick bucket file | `tick_file` globally set (empty in original) | Named `tickbuckets_<symbol>_<magic>.csv` on init. |
+
+Trading behavior and all scenario logic match 1:1. Parameter defaults are identical for parameters that exist on both.
+
+---
+
 ## Parameters
 
 ### Tick-Bucket Detector
@@ -100,7 +122,7 @@ Core entry-signal threshold.
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `magic` | `1` | Magic number for order filtering (change per asset when running multi-chart) |
+| `magic` *(MT5: `MagicNumber`)* | `1` | Magic number for order filtering (change per asset when running multi-chart) |
 | `maxSpread` | `45` | Reject entries when spread exceeds this |
 | `lotSize` | `0.01` | Base lot size |
 | `max_Lot` | `0.0` | Hard lot cap (0 = unlimited) |
@@ -139,11 +161,13 @@ Enable exactly one (scenarioD is the default-on).
 | `slopeLookbackBars` | `3` | Bars to measure slope across |
 | `slopeThresholdPts` | `15.0` | Min slope strength (points/bar) to confirm a direction |
 
-### AI Zones (Support / Resistance)
+### Volume-Weighted S/R Zones
+
+*(Historically called "AI zones". Not ML — a classic pivot + volume + ATR bander.)*
 
 | Parameter | Default | Purpose |
 |---|---|---|
-| `aiZone` | `false` | Enable volume-weighted pivot zones |
+| `aiZone` *(MT5: `useSRZones`)* | `false` | Enable volume-weighted pivot zones |
 | `lookbackPeriod` | `20` | Pivot left/right window size |
 | `vol_len` | `2` | Window for highest/lowest cumulative volume |
 | `atr_period` | `200` | ATR (Wilder) period for band width |
@@ -203,7 +227,7 @@ All buttons respect symbol + magic — other EAs on the chart are unaffected.
 ## Gotchas
 
 - **Only one scenario should be enabled at a time.** The code allows multiple flags to be true, but the call order in `OpenPositions` means enabling both B and D will run both on every averaging event — each appending a new position. This is almost certainly not what you want.
-- **Local TPs die if the EA is removed without `OnDeinit` firing.** `SavePositionData` writes the TP table only on clean deinit. A crash or forced detach leaves open positions with no TP anywhere. Re-attaching the EA on the same symbol+account reloads from `positions_backup_<symbol>_<login>.txt` — so don't delete that file.
+- **[MT4 only] Local TPs die if the EA is removed without `OnDeinit` firing.** `SavePositionData` writes the TP table only on clean deinit. A crash or forced detach leaves open positions with no TP anywhere. Re-attaching the EA on the same symbol+account reloads from `positions_backup_<symbol>_<login>.txt` — so don't delete that file. *(Does not apply to MT5 — positions carry real broker TPs.)*
 - **`closeTimeHour = 24` disables the close-all-hour.** Any value 0–23 enables it. There's no separate on/off switch.
 - **`autoCloseTrigger` is a passive flush.** It waits until the current tick's floating loss exceeds 10% of the day's realized profit AND the time is past `endHour`. If losses never hit that ratio, positions ride through the close.
 - **Session `Start == End` means OFF, not 24h.** Unlike some EAs, there's no "all zeros = trade all day" convention — zero-zero means the session is simply skipped. You need at least one non-zero session per day to trade.
@@ -218,19 +242,27 @@ All buttons respect symbol + magic — other EAs on the chart are unaffected.
 
 ## Installation
 
-**Build from source (MQL4):**
+### MT4
+
 1. Copy `TickBucketMartingale.mq4` to `<MT4 data folder>\MQL4\Experts\`.
+   - Find your data folder via **File → Open Data Folder** in MT4.
 2. Open MetaEditor (F4 in MT4), load the file, compile (F7). Should produce `TickBucketMartingale.ex4` with no errors.
-3. In MT4, refresh the Navigator (right-click → Refresh) and drag the EA onto a chart.
+3. Refresh Navigator (right-click → Refresh) and drag the EA onto a chart.
+4. Copy `TickBucketMartingale.set` to `<MT4 data folder>\MQL4\Presets\`. Click **Load** in the Inputs tab when attaching.
+5. Verify: dashboard appears at `DashX,DashY`; Experts log shows `Tick Bucket Martingale EA …`; Auto-Trading is enabled.
 
-**Load the preset:**
-- Copy `TickBucketMartingale.set` to `<MT4 data folder>\MQL4\Presets\`.
-- When attaching the EA, click **Load** in the Inputs tab → pick `TickBucketMartingale.set`.
+### MT5
 
-**Verify it's alive:**
-- Dashboard appears top-left (or at `DashX`,`DashY`).
-- Experts log shows `Tick Bucket Martingale EA <SYMBOL>,<TF> lb=… vol_len=… atr=… box_withd=…`.
-- Allow live trading is enabled (the smiley in the top-right corner of the chart).
+1. Copy the whole `mt5/TickBucketMartingale/` folder to `<MT5 data folder>\MQL5\Experts\TickBucketMartingale\`.
+   - The folder structure with `TickBucketMartingale.mq5` + `Include/*.mqh` must be preserved.
+   - Find your data folder via **File → Open Data Folder** in MT5.
+2. Open MetaEditor (F4), load `TickBucketMartingale.mq5`, compile (F7). Produces `TickBucketMartingale.ex5`.
+3. **Hedging account required** — the EA refuses to initialize on netting accounts. For MT5 brokers that offer both modes, create a dedicated hedging demo/live account.
+4. Copy `mt5/TickBucketMartingale/TickBucketMartingale.set` to `<MT5 data folder>\MQL5\Presets\`.
+5. Drag the EA onto a chart; **Load** the preset in the Inputs tab.
+6. Verify: dashboard appears; Experts log shows `TickBucketMartingale MT5 v1.00 — init OK`.
+
+See [`mt5/TickBucketMartingale/README.md`](mt5/TickBucketMartingale/README.md) for the MT5-specific quick-start.
 
 ---
 
