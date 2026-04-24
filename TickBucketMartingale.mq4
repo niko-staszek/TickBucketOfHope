@@ -133,6 +133,13 @@ double   g_profitBuyToday=0,  g_profitSellToday=0;
 double   g_profitBuyWeek=0,   g_profitSellWeek=0;
 double   g_profitBuyMonth=0,  g_profitSellMonth=0;
 
+// Max drawdown tracking (MoneyDancer-style Live Metrics)
+double   g_maxDDToday       = 0.0;
+double   g_maxDDEver        = 0.0;
+double   g_peakEquityToday  = 0.0;
+double   g_peakEquityEver   = 0.0;
+int      g_ddDayKey         = 0;
+
 double margine = 0.0;
 double freeMargin;
 
@@ -320,6 +327,7 @@ void OnTick()
          RefreshPeriodStats();
          g_lastStatsRefresh = tNow;
         }
+      UpdateMaxDD();
       DrawDashboard();
       CheckButtonClicks();
      }
@@ -1942,6 +1950,35 @@ int DayKey(datetime t)   { MqlDateTime m; TimeToStruct(t,m); return m.year*10000
 int WeekKey(datetime t)  { return (int)(t / (7*86400)); }
 int MonthKey(datetime t) { MqlDateTime m; TimeToStruct(t,m); return m.year*100 + m.mon; }
 
+//--- Track peak equity and rolling max drawdown (today + ever)
+void UpdateMaxDD()
+  {
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   int dayKey = DayKey(TimeCurrent());
+
+   if(dayKey != g_ddDayKey)
+     {
+      g_ddDayKey        = dayKey;
+      g_peakEquityToday = equity;
+      g_maxDDToday      = 0;
+     }
+
+   if(equity > g_peakEquityToday) g_peakEquityToday = equity;
+   if(equity > g_peakEquityEver)  g_peakEquityEver  = equity;
+
+   if(g_peakEquityToday > 0)
+     {
+      double ddToday = (g_peakEquityToday - equity) / g_peakEquityToday * 100.0;
+      if(ddToday > g_maxDDToday) g_maxDDToday = ddToday;
+     }
+
+   if(g_peakEquityEver > 0)
+     {
+      double ddEver = (g_peakEquityEver - equity) / g_peakEquityEver * 100.0;
+      if(ddEver > g_maxDDEver) g_maxDDEver = ddEver;
+     }
+  }
+
 //--- Floating P/L for currently open positions of one side
 double BasketFloatingPL(int dir)
   {
@@ -2089,16 +2126,33 @@ void DrawDashboard()
    color fClr = (fT >= 0 ? profitGreen : lossRed);
    DrawLabel(ObjName("D_FV"), x + w/2 + 60, y + 48, (fT >= 0 ? "+$" : "-$") + DoubleToString(MathAbs(fT), 2), fClr, 10, "Consolas");
 
-   // Margin % (kept from original panel)
+   y += 110;
+
+   // ============ LIVE METRICS PANEL ============
+   // Margin snapshot (was previously on POSITIONS panel)
    if(OrdersTotal() > 0 && AccountInfoDouble(ACCOUNT_MARGIN_FREE) < freeMargin)
      {
       margine    = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_LEVEL), 2);
       freeMargin = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE),  2);
      }
-   DrawLabel(ObjName("D_ML"), x + w/2 + 15, y + 70, "MARGIN %:", textMuted, 8, "Arial");
-   DrawLabel(ObjName("D_MV"), x + w/2 + 85, y + 70, DoubleToString(margine, 2), textBright, 9, "Consolas");
 
-   y += 110;
+   DrawPanel(ObjName("D_MetricsPanel"), x, y, w, 70, bgPanel, borderMain);
+   DrawLabel(ObjName("D_MetricsTitle"), x + 12, y + 6, ">> LIVE METRICS", accentBlue, 8, "Arial Bold");
+
+   // Left column: Max DD Today / Max DD Ever
+   DrawLabel(ObjName("D_L4"), x + 15,  y + 25, "MAX DD TODAY:", textMuted, 8, "Arial");
+   color ddTClr = (g_maxDDToday > 10.0 ? lossRed : textBright);
+   DrawLabel(ObjName("D_V4"), x + 115, y + 25, DoubleToString(g_maxDDToday, 2) + "%", ddTClr, 9, "Consolas");
+
+   DrawLabel(ObjName("D_L5"), x + 15,  y + 45, "MAX DD EVER:", textMuted, 8, "Arial");
+   color ddEClr = (g_maxDDEver > 20.0 ? lossRed : textBright);
+   DrawLabel(ObjName("D_V5"), x + 115, y + 45, DoubleToString(g_maxDDEver, 2) + "%", ddEClr, 9, "Consolas");
+
+   // Right column: Margin %
+   DrawLabel(ObjName("D_ML"), x + w/2 + 15, y + 25, "MARGIN %:", textMuted, 8, "Arial");
+   DrawLabel(ObjName("D_MV"), x + w/2 + 90, y + 25, DoubleToString(margine, 2), textBright, 9, "Consolas");
+
+   y += 75;
 
    // ============ CONTROLS PANEL ============
    DrawPanel(ObjName("D_CtrlPanel"), x, y, w, 80, bgPanel, borderMain);
